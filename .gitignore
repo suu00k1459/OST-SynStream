@@ -6,3 +6,10 @@ data/*.csv
 data/*.zip
 models/
 .DS_Store
+# PyCharm settings
+.idea/
+
+# Local Air Quality dataset and generated results
+stream_analytics/AirQuality.csv
+stream_analytics/Processed/
+stream_analytics/processed/
