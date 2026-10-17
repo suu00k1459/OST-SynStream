@@ -11,4 +11,4 @@ Attafi hadil CB1RLC<br>
 
 
 ### Architecture
-<img src="images/architecture.png" alt="SynStream architecture" width="800">
+<img src="images/SynStream Architecture.png" alt="SynStream architecture" width="800">
