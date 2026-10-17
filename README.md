@@ -18,7 +18,7 @@ temporal similarity, concept drift, anomalies, and downstream analytical utility
 ### 2 Selected Datasets <br>
 Two public multivariate time-series datasets will be used to evaluate the platform:
 • UCI Air Quality Dataset: Hourly environmental and chemical sensor measurements (CO,
-NOx, NO2, C6H6, temperature, and humidity) will be utilized for synthetic model prototyping, forecasting benchmarks, and seasonal concept-drift analysis.
+NOx, NO2, C6H6, temperature, and humidity) will be utilized for synthetic model prototyping, forecasting benchmarks, and seasonal concept-drift analysis.
 • HAI / SWaT Industrial Control Dataset: High-frequency cyber-physical telemetry from
 industrial control systems with labeled anomalies will be used to test streaming throughput
 and evaluate real-time anomaly detectio
