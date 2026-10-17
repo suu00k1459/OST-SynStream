@@ -10,7 +10,7 @@ Inayat Muhammad Faisal EJLU11 <br>
 Attafi hadil CB1RLC<br>
 
 ### 1 Project Overview <br>
-SynStream will be developed by Team EastWest (EW) as an open-source, containerized platform to generate, monitor, and evaluate synthetic multivariate time-series data from continuously
+SynStream will be developed by Team EastWest (EW) as an open-source, containerized platform to generate, monitor, and evaluate synthetic multivariate time-series data from continuously
 arriving sensor observations. The system will replay historical telemetry as a live stream, process
 observations using sliding windows, periodically generate synthetic time-series data, and evaluate
 temporal similarity, concept drift, anomalies, and downstream analytical utility in real time.
