@@ -1,8 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
-# Install OpenJDK 11 (required by PyFlink runtime) and curl
+# Install OpenJDK 17 (for PyFlink), curl, and C build tools (for Flink Python dependencies)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openjdk-17-jre-headless curl && \
+    apt-get install -y --no-install-recommends openjdk-17-jre-headless curl build-essential python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
