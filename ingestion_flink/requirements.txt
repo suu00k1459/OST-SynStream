@@ -1,3 +1,5 @@
 kafka-python-ng==2.2.3
 pandas==2.2.3
+numpy==1.26.4
 requests==2.32.3
+apache-flink==1.19.1
