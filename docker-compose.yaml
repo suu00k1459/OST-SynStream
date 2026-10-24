@@ -35,6 +35,7 @@ services:
       context: .
       dockerfile: ingestion_flink/Dockerfile
     container_name: synstream-replay-producer
+    command: ["python", "ingestion_flink/replay_producer.py"]
     environment:
       KAFKA_BROKER: kafka:9092
       TOPIC_RAW_SENSORS: sensors.raw
@@ -43,6 +44,25 @@ services:
       - ./data:/app/data
     depends_on:
       - kafka
+    networks:
+      - synstream-net
+
+  flink-processor:
+    build:
+      context: .
+      dockerfile: ingestion_flink/Dockerfile
+    container_name: synstream-flink-processor
+    command: ["python", "ingestion_flink/flink_window_processor.py"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+      TOPIC_RAW_SENSORS: sensors.raw
+      TOPIC_WINDOWED_REAL: sensors.windowed.real
+      TOPIC_FEATURES_REAL: sensors.features.real
+      WINDOW_SIZE: "24"
+      WINDOW_SLIDE: "4"
+    depends_on:
+      - kafka
+      - replay-producer
     networks:
       - synstream-net
 
