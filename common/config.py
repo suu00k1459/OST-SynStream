@@ -11,3 +11,4 @@ TOPIC_WINDOWED_SYN = os.getenv("TOPIC_WINDOWED_SYN", "sensors.windowed.synthetic
 DATASET_NAME = os.getenv("DATASET_NAME", "UCI_AirQuality")
 REPLAY_HZ = float(os.getenv("REPLAY_HZ", "2.0"))  # Events per second (e.g., 2.0 = 1 row every 0.5s)
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "24"))
+#testing
