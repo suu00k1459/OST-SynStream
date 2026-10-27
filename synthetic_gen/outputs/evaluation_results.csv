@@ -1,0 +1,3 @@
+model,MMD,discriminative_score,discriminator_acc,predictive_MAE
+Real (baseline),0.0029,0.015,0.515,0.3316
+TimeVAE,0.0135,0.375,0.875,0.3487
