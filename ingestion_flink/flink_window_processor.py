@@ -16,20 +16,18 @@ from common.config import (
     TOPIC_RAW_SENSORS,
     TOPIC_WINDOWED_REAL,
     TOPIC_FEATURES_REAL,
+    GROUP_FLINK_WINDOW,
     WINDOW_SIZE,
     WINDOW_SLIDE,
+    ACTIVE_SENSORS,
 )
 
-SENSOR_ORDER = [
-    "CO(GT)", "PT08.S1(CO)", "NMHC(GT)", "C6H6(GT)", "PT08.S2(NMHC)",
-    "NOx(GT)", "PT08.S3(NOx)", "NO2(GT)", "PT08.S4(NO2)", "PT08.S5(O3)",
-    "T", "RH", "AH"
-]
+SENSOR_ORDER = ACTIVE_SENSORS
 
 
 class SlidingWindowFeatureExtractor(KeyedProcessFunction):
     """
-    Stateful PyFlink operator that:
+    Stateful PyFlink operator (12 clean UCI features, 24x12 windows):
     1. Performs causal streaming imputation (replaces -200 sentinels or NaNs with last valid reading).
     2. Maintains online Welford running mean/variance per sensor for real-time Z-score scaling.
     3. Clips normalized Z-scores to [-4.0, +4.0] to prevent exploding gradients in TimeGAN/TimeVAE.
@@ -45,15 +43,15 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
         self.event_count = 0
         self.window_id = 0
 
-        # UPGRADE 1: Track last valid reading per sensor for true streaming causal forward-fill
+        # Track last valid reading per sensor for true streaming causal forward-fill
         self.last_valid = np.zeros(len(SENSOR_ORDER), dtype=np.float64)
+        self.has_valid = np.zeros(len(SENSOR_ORDER), dtype=bool)
 
         # Online Welford statistics for Z-score normalization
         self.n = 0
         self.mean = np.zeros(len(SENSOR_ORDER), dtype=np.float64)
         self.m2 = np.zeros(len(SENSOR_ORDER), dtype=np.float64)
 
-        # Initialize Kafka Producer with retry loop
         self.producer = None
         while self.producer is None:
             try:
@@ -84,22 +82,22 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
         dataset = record.get("dataset", "UCI_AirQuality")
         event_time = record.get("event_time", "")
 
-        # UPGRADE 2: Causal Streaming Imputation (replaces -200 sentinel or NaN with last valid reading)
+        # Causal Streaming Imputation (replaces -200 sentinel or NaN with last valid reading)
         raw_vals = []
         for idx, col in enumerate(SENSOR_ORDER):
             val = float(feats.get(col, -200.0))
-            if np.isnan(val) or val <= -199.0:  # Catch UCI -200 sentinel or NaN in real time!
-                val = self.last_valid[idx]      # Causal forward-fill from Flink state
+            if np.isnan(val) or val <= -199.0:
+                val = self.last_valid[idx] if self.has_valid[idx] else 0.0
             else:
-                self.last_valid[idx] = val      # Update state with valid reading
+                self.last_valid[idx] = val
+                self.has_valid[idx] = True
             raw_vals.append(val)
         x = np.array(raw_vals, dtype=np.float64)
 
-        # UPGRADE 3: Online Z-score normalization + +/- 4.0 sigma clipping for GAN stability
+        # Online Z-score normalization + +/- 4.0 sigma clipping for GAN stability
         x_norm = self._update_and_normalize(x)
         x_norm_clipped = np.clip(x_norm, -4.0, 4.0)
 
-        # Append unclipped raw values (for anomaly detection) and clipped normalized values (for GANs)
         self.raw_buffer.append(x)
         self.norm_buffer.append(x_norm_clipped)
         self.time_buffer.append(event_time)
@@ -107,8 +105,8 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
 
         # Trigger sliding window emission once buffer reaches WINDOW_SIZE and every WINDOW_SLIDE steps
         if len(self.raw_buffer) == WINDOW_SIZE and (self.event_count % WINDOW_SLIDE == 0):
-            raw_mat = np.array(self.raw_buffer)    # shape: (WINDOW_SIZE, 13)
-            norm_mat = np.array(self.norm_buffer)  # shape: (WINDOW_SIZE, 13)
+            raw_mat = np.array(self.raw_buffer)    # shape: (24, 12)
+            norm_mat = np.array(self.norm_buffer)  # shape: (24, 12)
 
             # 1. Payload for `sensors.windowed.real` (Suyoung & Hazem Pipeline 5)
             window_payload = {
@@ -126,7 +124,11 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
                     "std": np.round(np.sqrt(np.maximum(self.m2 / max(self.n - 1, 1), 1e-6)), 4).tolist(),
                 },
             }
-            self.producer.send(TOPIC_WINDOWED_REAL, value=window_payload)
+            self.producer.send(
+                TOPIC_WINDOWED_REAL,
+                key=dataset.encode("utf-8"),
+                value=window_payload,
+            )
 
             # 2. Extract temporal, statistical & spectral features per sensor for `sensors.features.real`
             t_idx = np.arange(WINDOW_SIZE, dtype=np.float64)
@@ -139,11 +141,10 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
                 slope = float(np.sum(t_centered * (series - series.mean())) / denom)
                 mean_abs_diff = float(np.mean(np.abs(np.diff(series))))
 
-                # UPGRADE 4: Add FFT Spectral Energy & Lag-1 Autocorrelation
+                # FFT Spectral Energy & Lag-1 Autocorrelation
                 fft_vals = np.fft.rfft(series - np.mean(series))
                 spectral_energy = float(np.sum(np.abs(fft_vals) ** 2) / len(series))
 
-                # Lag-1 autocorrelation (safe against zero variance when sensor is flat)
                 if np.std(series[:-1]) > 1e-6 and np.std(series[1:]) > 1e-6:
                     lag1_autocorr = float(np.corrcoef(series[:-1], series[1:])[0, 1])
                 else:
@@ -166,14 +167,19 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
                 "end_time": self.time_buffer[-1],
                 "window_features": feature_summary,
             }
-            self.producer.send(TOPIC_FEATURES_REAL, value=features_payload)
+            self.producer.send(
+                TOPIC_FEATURES_REAL,
+                key=dataset.encode("utf-8"),
+                value=features_payload,
+            )
             self.producer.flush()
 
+            first_col = SENSOR_ORDER[0]
             print(
                 f"[PyFlink Pipeline 2] Emitted window_id={self.window_id} | "
+                f"end_time={self.time_buffer[-1]} | "
                 f"Shape=({WINDOW_SIZE}, {len(SENSOR_ORDER)}) | "
-                f"CO(GT) mean={feature_summary['CO(GT)']['mean']} | "
-                f"CO(GT) spec_energy={feature_summary['CO(GT)']['spectral_energy']}"
+                f"{first_col} mean={feature_summary[first_col]['mean']}"
             )
             self.window_id += 1
             yield f"window_id={self.window_id - 1}"
@@ -189,7 +195,7 @@ def run_flink_pipeline():
         KafkaSource.builder()
         .set_bootstrap_servers(KAFKA_BROKER)
         .set_topics(TOPIC_RAW_SENSORS)
-        .set_group_id("synstream-flink-window-group")
+        .set_group_id(GROUP_FLINK_WINDOW)
         .set_starting_offsets(KafkaOffsetsInitializer.latest())
         .set_value_only_deserializer(SimpleStringSchema())
         .build()
@@ -201,7 +207,6 @@ def run_flink_pipeline():
         "Kafka Raw Sensor Source",
     )
 
-    # Key by dataset name and apply stateful sliding window & feature extraction
     (
         stream.key_by(lambda msg: json.loads(msg).get("dataset", "UCI_AirQuality"))
         .process(SlidingWindowFeatureExtractor(), output_type=Types.STRING())
@@ -209,7 +214,7 @@ def run_flink_pipeline():
 
     print(
         f"[PyFlink Pipeline 2] Listening to '{TOPIC_RAW_SENSORS}' "
-        f"(Window={WINDOW_SIZE}, Slide={WINDOW_SLIDE})..."
+        f"(Window={WINDOW_SIZE}, Slide={WINDOW_SLIDE}, Features={len(SENSOR_ORDER)})..."
     )
     env.execute("SynStream-Pipeline2-Window-Processor")
 
