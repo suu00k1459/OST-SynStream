@@ -13,17 +13,12 @@ from common.config import (
     TOPIC_RAW_SENSORS,
     DATASET_NAME,
     REPLAY_HZ,
+    ACTIVE_SENSORS,
 )
 
 DATA_DIR = "/app/data"
 UCI_URL = "https://archive.ics.uci.edu/static/public/360/air+quality.zip"
 UCI_CSV_PATH = os.path.join(DATA_DIR, "AirQualityUCI.csv")
-
-SENSOR_COLS = [
-    "CO(GT)", "PT08.S1(CO)", "NMHC(GT)", "C6H6(GT)", "PT08.S2(NMHC)",
-    "NOx(GT)", "PT08.S3(NOx)", "NO2(GT)", "PT08.S4(NO2)", "PT08.S5(O3)",
-    "T", "RH", "AH"
-]
 
 
 def load_or_download_dataset():
@@ -50,26 +45,21 @@ def load_or_download_dataset():
             + " "
             + df["Time"].astype(str).str.strip().str.replace(".", ":", regex=False)
         )
-        # Convert to ISO-8601 format with UTC 'Z' suffix (e.g., "2004-03-10T18:00:00Z")
         parsed_dt = pd.to_datetime(raw_dt_str, format="%d/%m/%Y %H:%M:%S", errors="coerce")
         df["event_time"] = parsed_dt.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        # Drop any trailing empty rows where Date/Time was missing
         df = df.dropna(subset=["event_time"]).reset_index(drop=True)
     else:
-        # Fallback if Date/Time columns are missing
         df["event_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Ensure all 13 sensor columns are numeric and forward-fill -200 sentinels
-    for col in SENSOR_COLS:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        df[col] = df[col].replace(-200.0, pd.NA)
+    # Convert the 12 selected sensor columns to float (keep -200.0 for PyFlink causal imputation)
+    for col in ACTIVE_SENSORS:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-200.0)
 
-    df[SENSOR_COLS] = df[SENSOR_COLS].ffill().bfill().fillna(0.0)
     print(
-        f"[Replay Producer] Loaded {len(df)} rows | "
+        f"[Replay Producer] Loaded {len(df)} rows with {len(ACTIVE_SENSORS)} clean features | "
         f"Range: {df['event_time'].iloc[0]} -> {df['event_time'].iloc[-1]}"
     )
-    return df, SENSOR_COLS
+    return df, ACTIVE_SENSORS
 
 
 def connect_kafka():
@@ -94,17 +84,20 @@ def run_replay():
     seq_id = 0
     while True:
         for _, row in df.iterrows():
-            # Use the actual historical recording timestamp as event_time
             actual_recording_time = str(row["event_time"])
 
             payload = {
                 "sequence_id": seq_id,
                 "event_time": actual_recording_time,
-                "ingest_time": datetime.now(timezone.utc).isoformat(),  # Optional: keeps wall-clock time for latency checks
+                "ingest_time": datetime.now(timezone.utc).isoformat(),
                 "dataset": DATASET_NAME,
                 "features": {col: float(row[col]) for col in cols},
             }
-            producer.send(TOPIC_RAW_SENSORS, value=payload)
+            producer.send(
+                TOPIC_RAW_SENSORS,
+                key=DATASET_NAME.encode("utf-8"),
+                value=payload,
+            )
 
             if seq_id % 10 == 0:
                 print(
