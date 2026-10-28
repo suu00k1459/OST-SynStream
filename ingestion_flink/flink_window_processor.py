@@ -30,10 +30,12 @@ SENSOR_ORDER = [
 class SlidingWindowFeatureExtractor(KeyedProcessFunction):
     """
     Stateful PyFlink operator that:
-    1. Maintains online Welford running mean/variance per sensor for real-time Z-score scaling.
-    2. Buffers a sliding window of size WINDOW_SIZE (24) and emits every WINDOW_SLIDE (4) events.
-    3. Publishes normalized 2D window tensors to `sensors.windowed.real` (for Suyoung's generator).
-    4. Publishes extracted statistical/temporal features to `sensors.features.real` (for Hazem).
+    1. Performs causal streaming imputation (replaces -200 sentinels or NaNs with last valid reading).
+    2. Maintains online Welford running mean/variance per sensor for real-time Z-score scaling.
+    3. Clips normalized Z-scores to [-4.0, +4.0] to prevent exploding gradients in TimeGAN/TimeVAE.
+    4. Buffers a sliding window of size WINDOW_SIZE (24) and emits every WINDOW_SLIDE (4) events.
+    5. Publishes normalized 2D window tensors to `sensors.windowed.real` (for Suyoung's generator).
+    6. Publishes statistical, temporal, and frequency-domain (FFT) features to `sensors.features.real` (for Hazem).
     """
 
     def open(self, runtime_context: RuntimeContext):
@@ -43,11 +45,15 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
         self.event_count = 0
         self.window_id = 0
 
+        # UPGRADE 1: Track last valid reading per sensor for true streaming causal forward-fill
+        self.last_valid = np.zeros(len(SENSOR_ORDER), dtype=np.float64)
+
         # Online Welford statistics for Z-score normalization
         self.n = 0
         self.mean = np.zeros(len(SENSOR_ORDER), dtype=np.float64)
         self.m2 = np.zeros(len(SENSOR_ORDER), dtype=np.float64)
 
+        # Initialize Kafka Producer with retry loop
         self.producer = None
         while self.producer is None:
             try:
@@ -59,6 +65,7 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
                 time.sleep(2)
 
     def _update_and_normalize(self, x: np.ndarray) -> np.ndarray:
+        """Updates running mean/variance using Welford's online algorithm and returns Z-scores."""
         self.n += 1
         delta = x - self.mean
         self.mean += delta / self.n
@@ -77,15 +84,24 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
         dataset = record.get("dataset", "UCI_AirQuality")
         event_time = record.get("event_time", "")
 
-        # Extract ordered feature vector & impute any NaN with current running mean
-        x = np.array(
-            [float(feats.get(col, 0.0)) for col in SENSOR_ORDER], dtype=np.float64
-        )
-        x = np.nan_to_num(x, nan=0.0)
-        x_norm = self._update_and_normalize(x)
+        # UPGRADE 2: Causal Streaming Imputation (replaces -200 sentinel or NaN with last valid reading)
+        raw_vals = []
+        for idx, col in enumerate(SENSOR_ORDER):
+            val = float(feats.get(col, -200.0))
+            if np.isnan(val) or val <= -199.0:  # Catch UCI -200 sentinel or NaN in real time!
+                val = self.last_valid[idx]      # Causal forward-fill from Flink state
+            else:
+                self.last_valid[idx] = val      # Update state with valid reading
+            raw_vals.append(val)
+        x = np.array(raw_vals, dtype=np.float64)
 
+        # UPGRADE 3: Online Z-score normalization + +/- 4.0 sigma clipping for GAN stability
+        x_norm = self._update_and_normalize(x)
+        x_norm_clipped = np.clip(x_norm, -4.0, 4.0)
+
+        # Append unclipped raw values (for anomaly detection) and clipped normalized values (for GANs)
         self.raw_buffer.append(x)
-        self.norm_buffer.append(x_norm)
+        self.norm_buffer.append(x_norm_clipped)
         self.time_buffer.append(event_time)
         self.event_count += 1
 
@@ -112,7 +128,7 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
             }
             self.producer.send(TOPIC_WINDOWED_REAL, value=window_payload)
 
-            # 2. Extract temporal & statistical features per sensor for `sensors.features.real`
+            # 2. Extract temporal, statistical & spectral features per sensor for `sensors.features.real`
             t_idx = np.arange(WINDOW_SIZE, dtype=np.float64)
             t_centered = t_idx - t_idx.mean()
             denom = np.sum(t_centered ** 2)
@@ -122,6 +138,17 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
                 series = raw_mat[:, idx]
                 slope = float(np.sum(t_centered * (series - series.mean())) / denom)
                 mean_abs_diff = float(np.mean(np.abs(np.diff(series))))
+
+                # UPGRADE 4: Add FFT Spectral Energy & Lag-1 Autocorrelation
+                fft_vals = np.fft.rfft(series - np.mean(series))
+                spectral_energy = float(np.sum(np.abs(fft_vals) ** 2) / len(series))
+
+                # Lag-1 autocorrelation (safe against zero variance when sensor is flat)
+                if np.std(series[:-1]) > 1e-6 and np.std(series[1:]) > 1e-6:
+                    lag1_autocorr = float(np.corrcoef(series[:-1], series[1:])[0, 1])
+                else:
+                    lag1_autocorr = 0.0
+
                 feature_summary[col] = {
                     "mean": round(float(np.mean(series)), 4),
                     "std": round(float(np.std(series)), 4),
@@ -129,6 +156,8 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
                     "max": round(float(np.max(series)), 4),
                     "slope": round(slope, 5),
                     "mean_abs_change": round(mean_abs_diff, 4),
+                    "spectral_energy": round(spectral_energy, 4),
+                    "lag1_autocorr": round(lag1_autocorr, 4),
                 }
 
             features_payload = {
@@ -143,7 +172,8 @@ class SlidingWindowFeatureExtractor(KeyedProcessFunction):
             print(
                 f"[PyFlink Pipeline 2] Emitted window_id={self.window_id} | "
                 f"Shape=({WINDOW_SIZE}, {len(SENSOR_ORDER)}) | "
-                f"CO(GT) mean={feature_summary['CO(GT)']['mean']}"
+                f"CO(GT) mean={feature_summary['CO(GT)']['mean']} | "
+                f"CO(GT) spec_energy={feature_summary['CO(GT)']['spectral_energy']}"
             )
             self.window_id += 1
             yield f"window_id={self.window_id - 1}"
