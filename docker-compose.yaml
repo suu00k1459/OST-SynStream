@@ -66,6 +66,53 @@ services:
     networks:
       - synstream-net
 
+  influxdb:
+    image: influxdb:2.7
+    container_name: synstream-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: synstream_password
+      DOCKER_INFLUXDB_INIT_ORG: synstream_org
+      DOCKER_INFLUXDB_INIT_BUCKET: synstream_bucket
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: synstream-secret-token
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - synstream-net
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  influx-sink:
+    build:
+      context: .
+      dockerfile: storage_influx/Dockerfile
+    container_name: synstream-influx-sink
+    command: ["python", "storage_influx/kafka_to_influx.py"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: synstream-secret-token
+      INFLUX_ORG: synstream_org
+      INFLUX_BUCKET: synstream_bucket
+      TOPIC_RAW_SENSORS: sensors.raw
+      TOPIC_FEATURES_REAL: sensors.features.real
+    depends_on:
+      kafka:
+        condition: service_started
+      influxdb:
+        condition: service_healthy
+    networks:
+      - synstream-net
+
+volumes:
+  influxdb_data:
+
 networks:
   synstream-net:
     driver: bridge
