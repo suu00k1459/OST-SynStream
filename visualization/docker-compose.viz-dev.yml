@@ -1,0 +1,33 @@
+services:
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+      DOCKER_INFLUXDB_INIT_ORG: synstream
+      DOCKER_INFLUXDB_INIT_BUCKET: synstream
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dev-token-change-me
+    volumes:
+      - influx-data:/var/lib/influxdb2
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - influxdb
+    mem_limit: 700m
+    environment:
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+      GF_PLUGINS_DISABLE_PLUGINS: "cloudwatch,elasticsearch,grafana-azure-monitor-datasource,grafana-pyroscope-datasource,grafana-testdata-datasource,jaeger,loki,mssql,mysql,parca,tempo,zipkin,graphite,opentsdb,googlecloud-logging-datasource,stackdriver"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  influx-data:
+  grafana-data:

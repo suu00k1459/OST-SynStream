@@ -1,13 +1,18 @@
 """
-Batch 1 - Train a TimeVAE-style generator on UCI Air Quality windows.
+Batch 1 - Train a TimeVAE-style generator on the team's shared UCI split.
 
-Run from the repository root:
+Run from the repository root (or anywhere):
     python synthetic_gen/train_timevae.py
 
+Input (Faisal's prepare_batch_splits.py):
+    data/splits/UCI_AirQuality_windows.npz
+    Only X_train, X_val, mean, std and sensor_names are read.
+    X_test / X_test_30pct are never loaded: they are the Batch 3 test period.
+
 Outputs:
-    synthetic_gen/models/timevae_uci.pt        trained model + settings + scaler
-    synthetic_gen/outputs/synthetic_windows.npy synthetic windows (original units)
-    synthetic_gen/outputs/real_vs_synthetic.png quick visual check
+    synthetic_gen/models/timevae_uci.pt         trained model + settings
+    synthetic_gen/outputs/uci_timevae.npy       synthetic windows (N, 24, 12), same z-scale as X_train
+    synthetic_gen/outputs/real_vs_synthetic_timevae.png quick visual check in real units
 """
 
 from pathlib import Path
@@ -16,61 +21,50 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 
 # ---------------------------------------------------------------------------
-# Settings - change FEATURES to switch between the 6-column and 12-column setup
+# Paths and settings
 # ---------------------------------------------------------------------------
+ROOT = Path(__file__).resolve().parent            # .../synthetic_gen
+REPO = ROOT.parent                                 # repository root
+SPLIT_PATH = REPO / "data" / "splits" / "UCI_AirQuality_windows.npz"
+MODEL_PATH = ROOT / "models" / "timevae_uci.pt"
+OUT_DIR = ROOT / "outputs"
+SYNTH_PATH = OUT_DIR / "uci_timevae.npy"
+
 CONFIG = {
-    "csv_path": "../stream_analytics/AirQuality.csv",
-    # Same 6 columns as stream_analytics/Processed/real_windows.csv
-    "features": ["CO(GT)", "NOx(GT)", "NO2(GT)", "C6H6(GT)", "T", "RH"],
-    # 12-column option (Flink's 13 sensors minus NMHC(GT), which is 90% missing):
-    # "features": ["CO(GT)", "PT08.S1(CO)", "C6H6(GT)", "PT08.S2(NMHC)", "NOx(GT)",
-    #              "PT08.S3(NOx)", "NO2(GT)", "PT08.S4(NO2)", "PT08.S5(O3)", "T", "RH", "AH"],
-    "seq_len": 24,          # 24 hourly rows = one day (matches WINDOW_SIZE in common/config.py)
-    "train_ratio": 0.7,     # first 70% for training, last 30% kept for the live replay
     "hidden_dim": 64,
     "latent_dim": 16,
     "epochs": 60,
     "batch_size": 64,
     "lr": 1e-3,
-    "beta": 0.05,           # weight of the KL term (lower = sharper but less varied)
-    "max_missing_frac": 0.2,  # drop windows where more than 20% of cells were originally missing
+    "beta": 0.05,        # weight of the KL term (lower = sharper but less varied)
+    "n_generate": 3000,  # number of synthetic windows to save
+    "clip": 4.0,         # X_train is clipped to +-4, so synthetic output is clipped the same way
     "seed": 42,
 }
 
-ROOT = Path(__file__).resolve().parent
-MODEL_PATH = ROOT / "models" / "timevae_uci.pt"
-OUT_DIR = ROOT / "outputs"
-
 
 # ---------------------------------------------------------------------------
-# 1. Data preparation
+# 1. Data
 # ---------------------------------------------------------------------------
-def load_uci(csv_path, features):
-    """Read the raw UCI CSV, turn -200 into missing, fill gaps by interpolation."""
-    df = pd.read_csv(csv_path, sep=";", decimal=",")
-    df = df.dropna(how="all", axis=0).dropna(how="all", axis=1)
-    df.index = pd.to_datetime(df["Date"] + " " + df["Time"], format="%d/%m/%Y %H.%M.%S")
-    data = df[features].apply(pd.to_numeric, errors="coerce").replace(-200, np.nan)
-    missing = data.isna()                       # remember which cells were filled in
-    data = data.interpolate(method="time", limit_direction="both")
-    return data, missing
+def load_split(path=SPLIT_PATH):
+    """Read only the arrays we are allowed to use. np.load on .npz is lazy,
+    so the test arrays are never touched."""
+    d = np.load(path)
+    return {
+        "X_train": d["X_train"].astype(np.float32),   # (6526, 24, 12) scaled + clipped
+        "X_val": d["X_val"].astype(np.float32),       # (346, 24, 12)  for tuning only
+        "mean": d["mean"].astype(np.float32),         # (12,) real = x * std + mean
+        "std": d["std"].astype(np.float32),
+        "sensor_names": [str(s) for s in d["sensor_names"]],
+    }
 
 
-def split_by_time(data, train_ratio):
-    """Chronological split: no shuffling, the model never sees the replay period."""
-    cut = int(len(data) * train_ratio)
-    return data.iloc[:cut], data.iloc[cut:]
-
-
-def make_windows(array, seq_len, stride=1):
-    """Slide a seq_len-row window down the table -> (n_windows, seq_len, n_features)."""
-    starts = range(0, len(array) - seq_len + 1, stride)
-    return np.stack([array[s:s + seq_len] for s in starts])
+def to_real_units(x, mean, std):
+    return x * std + mean
 
 
 # ---------------------------------------------------------------------------
@@ -122,36 +116,32 @@ def vae_loss(recon, x, mu, logvar, beta):
 
 
 # ---------------------------------------------------------------------------
-# 3. Training
+# 3. Training (X_train to learn, X_val only to watch / pick the best epoch)
 # ---------------------------------------------------------------------------
-def train(cfg):
+@torch.no_grad()
+def val_loss(model, x_val, beta):
+    model.eval()
+    recon, mu, logvar = model(x_val)
+    loss, rec, _ = vae_loss(recon, x_val, mu, logvar, beta)
+    return loss.item(), rec.item()
+
+
+def train(cfg, split):
     torch.manual_seed(cfg["seed"])
     np.random.seed(cfg["seed"])
 
-    data, missing = load_uci(cfg["csv_path"], cfg["features"])
-    train_df, replay_df = split_by_time(data, cfg["train_ratio"])
-    train_missing, _ = split_by_time(missing, cfg["train_ratio"])
-    print(f"Train period : {train_df.index[0]} -> {train_df.index[-1]} ({len(train_df)} rows)")
-    print(f"Replay period: {replay_df.index[0]} -> {replay_df.index[-1]} ({len(replay_df)} rows)")
+    x_train = split["X_train"]
+    x_val = torch.from_numpy(split["X_val"])
+    n_windows, seq_len, n_features = x_train.shape
+    print(f"X_train {x_train.shape} | X_val {tuple(x_val.shape)} | sensors: {split['sensor_names']}")
 
-    # Z-score using training statistics only (same idea as Flink's normalization)
-    mean = train_df.values.mean(axis=0)
-    std = train_df.values.std(axis=0)
-    std[std < 1e-6] = 1.0
-    train_scaled = (train_df.values - mean) / std
-
-    windows = make_windows(train_scaled, cfg["seq_len"]).astype(np.float32)
-    # Long gaps become straight interpolated lines - don't teach those to the model
-    miss_frac = make_windows(train_missing.values.astype(float), cfg["seq_len"]).mean(axis=(1, 2))
-    windows = windows[miss_frac <= cfg["max_missing_frac"]]
-    print(f"Training windows: {windows.shape}  (n_windows, seq_len, n_features)")
-
-    model = TimeVAE(len(cfg["features"]), cfg["seq_len"], cfg["hidden_dim"], cfg["latent_dim"])
+    model = TimeVAE(n_features, seq_len, cfg["hidden_dim"], cfg["latent_dim"])
     optim = torch.optim.Adam(model.parameters(), lr=cfg["lr"])
     loader = torch.utils.data.DataLoader(
-        torch.from_numpy(windows), batch_size=cfg["batch_size"], shuffle=True
+        torch.from_numpy(x_train), batch_size=cfg["batch_size"], shuffle=True
     )
 
+    best_val, best_state, best_epoch = float("inf"), None, 0
     for epoch in range(1, cfg["epochs"] + 1):
         model.train()
         tot = rec = kld = 0.0
@@ -164,60 +154,84 @@ def train(cfg):
             tot += loss.item() * len(x)
             rec += r.item() * len(x)
             kld += k.item() * len(x)
+
+        v_loss, v_rec = val_loss(model, x_val, cfg["beta"])
+        if v_loss < best_val:
+            best_val, best_epoch = v_loss, epoch
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+
         if epoch == 1 or epoch % 10 == 0:
-            n = len(windows)
-            print(f"epoch {epoch:3d} | loss {tot/n:.4f} | recon {rec/n:.4f} | kl {kld/n:.4f}")
+            print(f"epoch {epoch:3d} | train loss {tot/n_windows:.4f} "
+                  f"(recon {rec/n_windows:.4f}, kl {kld/n_windows:.4f}) | "
+                  f"val loss {v_loss:.4f} (recon {v_rec:.4f})")
+
+    model.load_state_dict(best_state)
+    print(f"Best epoch by X_val loss: {best_epoch} (val loss {best_val:.4f})")
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
-        {"state_dict": model.state_dict(), "config": cfg,
-         "scaler_mean": mean, "scaler_std": std},
+        {"state_dict": model.state_dict(), "config": cfg, "best_epoch": best_epoch,
+         "seq_len": seq_len, "n_features": n_features,
+         "sensor_names": split["sensor_names"],
+         "scaler_mean": split["mean"], "scaler_std": split["std"]},
         MODEL_PATH,
     )
     print(f"Saved model -> {MODEL_PATH}")
-    return model, windows, mean, std
+    return model
 
 
 # ---------------------------------------------------------------------------
-# 4. Generate + quick visual check
+# 4. Generate (scaled) + plot (real units)
 # ---------------------------------------------------------------------------
-def generate_and_plot(model, real_windows, mean, std, cfg, n=500):
+def generate(model, cfg):
     model.eval()
-    synth_scaled = model.generate(n).numpy()
-    synth = synth_scaled * std + mean                      # back to original units
-    real = real_windows * std + mean
-
+    synth = model.generate(cfg["n_generate"]).numpy()
+    synth = np.clip(synth, -cfg["clip"], cfg["clip"]).astype(np.float32)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(OUT_DIR / "synthetic_windows.npy", synth)
-    print(f"Saved {n} synthetic windows -> {OUT_DIR / 'synthetic_windows.npy'}")
+    np.save(SYNTH_PATH, synth)
+    print(f"Saved {synth.shape} synthetic windows (scaled like X_train) -> {SYNTH_PATH}")
+    return synth
 
-    feats = cfg["features"]
-    hours = np.arange(cfg["seq_len"])
-    fig, axes = plt.subplots(2, len(feats), figsize=(3.2 * len(feats), 6))
-    idx_r = np.random.choice(len(real), 5, replace=False)
-    for j, name in enumerate(feats):
-        ax = axes[0, j]
-        ax.set_xlabel("hour in window")
+
+def plot_real_vs_synthetic(split, synth, filename="real_vs_synthetic_timevae.png", n_lines=5):
+    """Shared by train_timevae.py and train_timegan.py (each passes its own filename)."""
+    mean, std, names = split["mean"], split["std"], split["sensor_names"]
+    real = to_real_units(split["X_train"], mean, std)
+    fake = to_real_units(synth, mean, std)
+    seq_len = real.shape[1]
+    hours = np.arange(seq_len)
+    rng = np.random.default_rng(0)
+    idx_r = rng.choice(len(real), n_lines, replace=False)
+
+    n_cols = 6
+    n_groups = int(np.ceil(len(names) / n_cols))       # 12 sensors -> 2 groups of 6
+    fig, axes = plt.subplots(2 * n_groups, n_cols, figsize=(3.2 * n_cols, 3.0 * 2 * n_groups))
+    for j, name in enumerate(names):
+        g, c = divmod(j, n_cols)
+        ax = axes[2 * g, c]                              # top: sample windows
         for i in idx_r:
             ax.plot(hours, real[i, :, j], color="tab:blue", alpha=0.6, lw=1)
-        for i in range(5):
-            ax.plot(hours, synth[i, :, j], color="tab:orange", alpha=0.6, lw=1)
+        for i in range(n_lines):
+            ax.plot(hours, fake[i, :, j], color="tab:orange", alpha=0.6, lw=1)
         ax.set_title(name)
-        if j == 0:
-            ax.set_ylabel("5 sample windows")
-        ax = axes[1, j]
+        ax.set_xlabel("hour in window")
+
+        ax = axes[2 * g + 1, c]                          # bottom: value distribution
         bins = np.linspace(real[:, :, j].min(), real[:, :, j].max(), 40)
         ax.hist(real[:, :, j].ravel(), bins=bins, density=True, alpha=0.5, color="tab:blue", label="real")
-        ax.hist(synth[:, :, j].ravel(), bins=bins, density=True, alpha=0.5, color="tab:orange", label="synthetic")
-        ax.set_xlabel("value")
-        if j == 0:
-            ax.set_ylabel("value distribution")
+        ax.hist(fake[:, :, j].ravel(), bins=bins, density=True, alpha=0.5, color="tab:orange", label="synthetic")
+        ax.set_xlabel("value (real units)")
+        if c == 0:
             ax.legend()
     fig.tight_layout()
-    fig.savefig(OUT_DIR / "real_vs_synthetic.png", dpi=110)
-    print(f"Saved plot -> {OUT_DIR / 'real_vs_synthetic.png'}")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(OUT_DIR / filename, dpi=110)
+    plt.close(fig)
+    print(f"Saved plot -> {OUT_DIR / filename}")
 
 
 if __name__ == "__main__":
-    model, windows, mean, std = train(CONFIG)
-    generate_and_plot(model, windows, mean, std, CONFIG)
+    split = load_split()
+    model = train(CONFIG, split)
+    synth = generate(model, CONFIG)
+    plot_real_vs_synthetic(split, synth)

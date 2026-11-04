@@ -4,16 +4,18 @@ Batch 2 - Evaluate how similar synthetic windows are to real windows.
 Run from the repository root (after training at least one model):
     python synthetic_gen/evaluate_batch.py
 
-Three metrics:
-  1. MMD                 Are real and synthetic windows drawn from the same distribution?
-                         (lower = better, compare with the real-vs-real baseline)
-  2. Discriminative score Can a classifier tell real from synthetic?
-                         |accuracy - 0.5|  (0 = cannot tell them apart = best)
-  3. Predictive score    Is synthetic data useful? (TSTR: Train on Synthetic, Test on Real)
-                         A GRU learns to predict the next hour; tested on the unseen replay period.
-                         Compare with TRTR (Train on Real, Test on Real). Lower MAE = better.
+Uses only X_train and X_val from the shared split.
+X_test / X_test_30pct are never loaded (Batch 3 test period, owned by Hazem).
+So the predictive score here is a development check on X_val,
+not the official TRTR vs TSTR result.
 
-Also saves a PCA plot so the overlap can be seen by eye.
+Three metrics:
+  1. MMD                  Are real and synthetic windows drawn from the same distribution?
+                          (lower = better, compare with the real-vs-real baseline)
+  2. Discriminative score Can a classifier tell real from synthetic?
+                          |accuracy - 0.5|  (0 = cannot tell them apart = best)
+  3. Predictive score     Train a next-hour GRU on this data, test on X_val.
+                          Close to the real baseline = useful synthetic data.
 
 Outputs:
     synthetic_gen/outputs/evaluation_results.csv
@@ -31,40 +33,19 @@ import torch
 import torch.nn as nn
 from sklearn.decomposition import PCA
 
-from train_timevae import CONFIG, load_uci, split_by_time, make_windows
+from train_timevae import load_split
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "outputs"
 
 # Synthetic files to evaluate - missing files are skipped automatically
 SYNTHETIC_FILES = {
-    "TimeVAE": OUT_DIR / "synthetic_windows.npy",
-    "TimeGAN": OUT_DIR / "synthetic_windows_timegan.npy",
+    "TimeVAE": OUT_DIR / "uci_timevae.npy",
+    "TimeGAN": OUT_DIR / "uci_timegan.npy",
+    "Diffusion": OUT_DIR / "uci_diffusion.npy",
 }
-N_SAMPLES = 500   # windows per group used in each comparison
+N_SAMPLES = 500   # windows per group used in MMD / discriminator / PCA
 SEED = 42
-
-
-# ---------------------------------------------------------------------------
-# Data
-# ---------------------------------------------------------------------------
-def load_real_windows(cfg):
-    """Real windows in original units: training period and the unseen replay period."""
-    data, missing = load_uci(cfg["csv_path"], cfg["features"])
-    train_df, test_df = split_by_time(data, cfg["train_ratio"])
-    train_miss, test_miss = split_by_time(missing, cfg["train_ratio"])
-
-    def windows(df, miss):
-        w = make_windows(df.values, cfg["seq_len"])
-        frac = make_windows(miss.values.astype(float), cfg["seq_len"]).mean(axis=(1, 2))
-        return w[frac <= cfg["max_missing_frac"]].astype(np.float32)
-
-    train_w = windows(train_df, train_miss)
-    test_w = windows(test_df, test_miss)
-    mean = train_df.values.mean(axis=0)
-    std = train_df.values.std(axis=0)
-    std[std < 1e-6] = 1.0
-    return train_w, test_w, mean, std
 
 
 def sample(x, n, rng):
@@ -124,7 +105,7 @@ def discriminative_score(real, synth, rng, epochs=40):
 
 
 # ---------------------------------------------------------------------------
-# Metric 3: Predictive score (TSTR)
+# Metric 3: Predictive score (development check on X_val)
 # ---------------------------------------------------------------------------
 class GRUForecaster(nn.Module):
     def __init__(self, n_features, hidden=32):
@@ -137,10 +118,10 @@ class GRUForecaster(nn.Module):
         return self.fc(out)
 
 
-def predictive_mae(train_windows, test_windows, rng, epochs=40):
-    """Learn hour t -> hour t+1 on train_windows, report MAE on test_windows."""
+def predictive_mae(train_windows, eval_windows, rng, epochs=40):
+    """Learn hour t -> hour t+1 on train_windows, report MAE on eval_windows."""
     xtr = torch.from_numpy(train_windows.astype(np.float32))
-    xte = torch.from_numpy(test_windows.astype(np.float32))
+    xev = torch.from_numpy(eval_windows.astype(np.float32))
     model = GRUForecaster(xtr.shape[2])
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     for _ in range(epochs):
@@ -149,7 +130,7 @@ def predictive_mae(train_windows, test_windows, rng, epochs=40):
             loss = nn.functional.l1_loss(model(x[:, :-1]), x[:, 1:])
             opt.zero_grad(); loss.backward(); opt.step()
     with torch.no_grad():
-        return float(nn.functional.l1_loss(model(xte[:, :-1]), xte[:, 1:]))
+        return float(nn.functional.l1_loss(model(xev[:, :-1]), xev[:, 1:]))
 
 
 # ---------------------------------------------------------------------------
@@ -176,44 +157,41 @@ def main():
     rng = np.random.default_rng(SEED)
     torch.manual_seed(SEED)
 
-    train_w, test_w, mean, std = load_real_windows(CONFIG)
-    z = lambda a: ((a - mean) / std).astype(np.float32)     # same scale for every group
-    print(f"Real windows: train {train_w.shape}, unseen replay period {test_w.shape}")
+    split = load_split()
+    x_train, x_val = split["X_train"], split["X_val"]   # already on the shared z-scale
+    print(f"Real windows: X_train {x_train.shape}, X_val {x_val.shape}")
 
     synths = {}
     for name, path in SYNTHETIC_FILES.items():
-        if path.exists():
-            s = np.load(path)
-            if s.shape[1:] != train_w.shape[1:]:
-                print(f"Skip {name}: shape {s.shape[1:]} != real {train_w.shape[1:]} "
-                      f"(retrain it with the current features)")
-                continue
-            synths[name] = z(sample(s, N_SAMPLES, rng))
-        else:
+        if not path.exists():
             print(f"Skip {name}: {path.name} not found (train the model first)")
+            continue
+        s = np.load(path).astype(np.float32)
+        if s.shape[1:] != x_train.shape[1:]:
+            print(f"Skip {name}: shape {s.shape[1:]} != real {x_train.shape[1:]}")
+            continue
+        synths[name] = sample(s, N_SAMPLES, rng)
     if not synths:
         print("No synthetic data to evaluate.")
         return
 
-    real = z(sample(train_w, N_SAMPLES, rng))
-    real_other = z(sample(train_w, N_SAMPLES, rng))
-    test = z(test_w)
+    real = sample(x_train, N_SAMPLES, rng)
+    real_other = sample(x_train, N_SAMPLES, rng)
 
     # Baseline row: real vs another real sample = the best score we can hope for
     rows = []
     print("\n[Baseline] real vs real ...")
-    trtr = predictive_mae(z(sample(train_w, N_SAMPLES, rng)), test, rng)
     d_score, d_acc = discriminative_score(real, real_other, rng)
     rows.append({"model": "Real (baseline)", "MMD": mmd_rbf(real, real_other),
                  "discriminative_score": d_score, "discriminator_acc": d_acc,
-                 "predictive_MAE": trtr})
+                 "predictive_MAE_val": predictive_mae(sample(x_train, N_SAMPLES, rng), x_val, rng)})
 
     for name, s in synths.items():
         print(f"[{name}] computing metrics ...")
         d_score, d_acc = discriminative_score(real, s, rng)
         rows.append({"model": name, "MMD": mmd_rbf(real, s),
                      "discriminative_score": d_score, "discriminator_acc": d_acc,
-                     "predictive_MAE": predictive_mae(s, test, rng)})
+                     "predictive_MAE_val": predictive_mae(s, x_val, rng)})
 
     df = pd.DataFrame(rows).set_index("model").round(4)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,7 +202,7 @@ def main():
     print("\nHow to read:")
     print("  MMD                  lower = closer to real (baseline shows the noise floor)")
     print("  discriminative_score 0 = classifier cannot tell real from synthetic (best), 0.5 = always can")
-    print("  predictive_MAE       train on this data, test on the unseen replay period; close to baseline = useful")
+    print("  predictive_MAE_val   train on this data, test on X_val; close to baseline = useful")
     print(f"\nSaved -> {OUT_DIR / 'evaluation_results.csv'}")
     print(f"Saved -> {OUT_DIR / 'pca_real_vs_synthetic.png'}")
 
