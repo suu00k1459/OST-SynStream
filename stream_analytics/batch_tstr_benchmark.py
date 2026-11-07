@@ -44,6 +44,15 @@ from metrics import compare_windows, placeholder_synthetic
 OUT = os.path.join(os.path.dirname(__file__), "results")
 
 
+def similarity(real_w, syn_w, n=2000, seed=0):
+    """Similarity metrics on RANDOM samples spread over the whole training period
+    (taking the first n windows would compare against one season only)."""
+    rng = np.random.default_rng(seed)
+    r = real_w[rng.choice(len(real_w), min(n, len(real_w)), replace=False)]
+    s = syn_w[rng.choice(len(syn_w), min(n, len(syn_w)), replace=False)]
+    return compare_windows(r, s)
+
+
 def synthetic_sources(train_w, specs, seed=0):
     """Return {name: windows}. specs = ['path.npy:Name', ...] or None."""
     rng = np.random.default_rng(seed)
@@ -133,7 +142,7 @@ def run_uci(path, syn_specs, L, splits=None, test_part="test_30pct"):
                  "RMSE": mean_squared_error(y_te, naive) ** 0.5 * std_t})
     for src, w in sources.items():
         X, y = windows_to_xy(w, t_idx)
-        sim = compare_windows(train_w[:2000], w[:2000]) if src != "REAL (TRTR)" else {}
+        sim = similarity(train_w, w) if src != "REAL (TRTR)" else {}
         for mname, make in models.items():
             pred = make().fit(X, y).predict(X_te)
             rows.append({"train_on": src, "model": mname,
@@ -189,7 +198,7 @@ def run_hai(train_glob, test_glob, label_glob, syn_specs, L, stride, max_rows, r
         s_test = -model.score_samples(F_te)
         thr = np.quantile(s_train, 0.99)             # threshold from training only
         pred = (s_test > thr).astype(int)
-        sim = compare_windows(train_w[:2000], w[:2000]) if src != "REAL (TRTR)" else {}
+        sim = similarity(train_w, w) if src != "REAL (TRTR)" else {}
         rows.append({"train_on": src, "model": "IsolationForest",
                      "AUROC": roc_auc_score(y_te, s_test) if y_te.any() else np.nan,
                      "F1": f1_score(y_te, pred, zero_division=0),
