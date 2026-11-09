@@ -18,17 +18,18 @@ observations using sliding windows, periodically generate synthetic time-series 
 temporal similarity, concept drift, anomalies, and downstream analytical utility in real time.
 
 ## Contents
-- [Datasets](#Datasets)
-- [Architecture](#Architecture)
-- [Flow & Viewer](#Flow-&-Viewer)
-- [Docker Deployment Guide](#Docker-Deployment-Guide)
-- [Models & Evaluation](#Models-&-Evaluation)
-- [Evaluation](#Evaluation)
-- [How to run](#How-to-run)
-- [References](#References)
+- [Datasets](#datasets)
+- [Architecture](#architecture)
+- [Flow & Viewer](#flow-&-viewer)
+- [Docker Deployment Guide](#docker-deployment-guide)
+- [Models & Evaluation](#models-&-evaluation)
+- [Evaluation](#evaluation)
+- [How to run](#how-to-run)
+- [References](#references)
 
 ---
-## Datasets <br>
+## Datasets 
+
 Two public multivariate time-series datasets will be used to evaluate the platform:
 
 • UCI Air Quality Dataset: Hourly environmental and chemical sensor measurements (CO,
@@ -40,7 +41,8 @@ and evaluate real-time anomaly detectio
 
 ---
 
-## Architecture <br>
+## Architecture 
+
 <img src="images/SynStream Architecture.png" alt="SynStream architecture" width="800">
 
 ---
