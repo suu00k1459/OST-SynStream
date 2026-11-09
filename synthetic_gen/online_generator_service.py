@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,7 @@ sys.path.insert(0, str(ROOT))                    # train_*.py (model classes)
 sys.path.insert(0, str(REPO))                    # common/config.py
 
 from common.config import (                      # noqa: E402  (shared team contract)
-    KAFKA_BROKER, TOPIC_WINDOWED_REAL, TOPIC_WINDOWED_SYN,
+    KAFKA_BROKER, TOPIC_WINDOWED_REAL, TOPIC_WINDOWED_SYN,TOPIC_ANALYTICS_ALERTS,
     GROUP_SYNTHETIC_GEN, DATASET_NAME, WINDOW_SIZE, WINDOW_SLIDE,
 )
 
@@ -68,7 +69,7 @@ def load_generator(name):
         with torch.no_grad():
             return np.clip(raw_fn(n), -clip, clip).astype(np.float32)
 
-    return generate_fn, ckpt
+    return generate_fn, ckpt, model
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +127,7 @@ def fake_real_messages(n, sensor_names):
 
 
 def run_dry(generator, every, n_real=10):
-    generate_fn, ckpt = load_generator(generator)
+    generate_fn, ckpt, _ = load_generator(generator)
     out, t0 = [], time.time()
     for k, real in enumerate(fake_real_messages(n_real, list(ckpt["sensor_names"]))):
         check_sensors(real, ckpt)
@@ -155,16 +156,36 @@ def connect(make, what):
             print(f"Waiting for Kafka at {KAFKA_BROKER} ({what}) ...")
             time.sleep(2)
 
+def retrain_vae(model, windows, cfg, epochs=5):
+    """Fine-tune the TimeVAE on recent real windows (same loss as train_timevae.py)."""
+    from train_timevae import vae_loss
+    x = torch.from_numpy(np.stack(windows))                     # (N, 24, 12)
+    opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"] * 0.5)
+    model.train()
+    for epoch in range(epochs):
+        for batch in torch.split(x[torch.randperm(len(x))], cfg["batch_size"]):
+            recon, mu, logvar = model(batch)
+            loss, _, _ = vae_loss(recon, batch, mu, logvar, cfg["beta"])
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    model.eval()
+    print(f"Retrained on {len(x)} recent windows, last loss {loss.item():.4f}")
 
 def run_live(generator, every):
     from kafka import KafkaConsumer, KafkaProducer
 
-    generate_fn, ckpt = load_generator(generator)
+    generate_fn, ckpt, model = load_generator(generator)
+    recent = deque(maxlen=200)                     # 최근 진짜 윈도우 200개 (재학습 재료)
+    mean = np.asarray(ckpt["scaler_mean"], dtype=np.float32)
+    std = np.asarray(ckpt["scaler_std"], dtype=np.float32)
+    clip = ckpt["config"]["clip"]
+
     consumer = connect(lambda: KafkaConsumer(
-        TOPIC_WINDOWED_REAL,
+        TOPIC_WINDOWED_REAL,TOPIC_ANALYTICS_ALERTS,
         bootstrap_servers=KAFKA_BROKER,
         group_id=f"{GROUP_SYNTHETIC_GEN}-{generator.lower()}",   # one group per generator
-        auto_offset_reset="latest",
+        auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
     ), "consumer")
     producer = connect(lambda: KafkaProducer(
@@ -175,10 +196,22 @@ def run_live(generator, every):
           f"(every {every} window(s))")
 
     for k, record in enumerate(consumer):
+        if record.topic == TOPIC_ANALYTICS_ALERTS:
+            alert = record.value
+            if (alert.get("type") == "DRIFT" and alert.get("trigger_retrain")
+                    and generator == "TimeVAE" and len(recent) >= 50):
+                print(f"Drift alert on {alert.get('sensor')} -> retraining")
+                retrain_vae(model, list(recent), ckpt["config"])
+            continue
+
         real = record.value
         check_sensors(real, ckpt)
+        z = (np.asarray(real["data_raw"], dtype=np.float32) - mean) / std
+        recent.append(np.clip(z, -clip, clip))
+
         if k % every:
             continue
+
         msg = build_message(real, generate_fn(1)[0], ckpt, generator)
         producer.send(TOPIC_WINDOWED_SYN, key=msg["dataset"].encode("utf-8"), value=msg)
         print(f"{datetime.now(timezone.utc):%H:%M:%S} real window {real['window_id']} "

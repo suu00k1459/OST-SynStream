@@ -66,6 +66,17 @@ services:
     networks:
       - synstream-net
 
+  synthetic-generator:
+    build:
+      context: .                            
+      dockerfile: synthetic_gen/Dockerfile  
+    environment:
+      GENERATOR: TimeVAE                    
+    volumes:
+      - ./synthetic_gen/models:/app/synthetic_gen/models 
+
 networks:
   synstream-net:
     driver: bridge
+
+
