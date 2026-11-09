@@ -3,30 +3,32 @@ Synthetic Time-Series Analytics and Real-Time Monitoring
 
 ### Group members: <br>
 
-Sebastian Florez Rojas G9X2XY <br>
-Suyoung Kim W3K59J <br>
-Hashlamon Hazem Wael Abdalmohsen RFTP59 <br>
-Inayat Muhammad Faisal EJLU11 <br>
-Attafi hadil CB1RLC<br>
+| Name | Neptun code |
+|---|---|
+| Sebastian Florez Rojas | G9X2XY |
+| Suyoung Kim | W3K59J |
+| Hashlamon Hazem Wael Abdalmohsen | RFTP59 |
+| Inayat Muhammad Faisal | EJLU11 |
+| Attafi Hadil | CB1RLC |
 
-## Contents
-- [Project Overview](#projectoverview)
-- [Datasets](#datasets)
-- [Architecture](#architecture)
-- [Docker Deployment Guide](#DockerDeploymentGuide)
-- [Models](#models)
-- [Evaluation](#evaluation)
-- [Results](#results)
-- [How to run](#how-to-run)
-- [References](#references)
-
-### 1 Project Overview <br>
+## Project Overview <br>
 SynStream will be developed by Team EastWest (EW) as an open-source, containerized platform to generate, monitor, and evaluate synthetic multivariate time-series data from continuously
 arriving sensor observations. The system will replay historical telemetry as a live stream, process
 observations using sliding windows, periodically generate synthetic time-series data, and evaluate
 temporal similarity, concept drift, anomalies, and downstream analytical utility in real time.
 
-### 2 Selected Datasets <br>
+## Contents
+- [Datasets](#Datasets)
+- [Architecture](#Architecture)
+- [Flow & Viewer](#Flow-&-Viewer)
+- [Docker Deployment Guide](#Docker-Deployment-Guide)
+- [Models & Evaluation](#Models-&-Evaluation)
+- [Evaluation](#Evaluation)
+- [How to run](#How-to-run)
+- [References](#References)
+
+---
+## Datasets <br>
 Two public multivariate time-series datasets will be used to evaluate the platform:
 
 • UCI Air Quality Dataset: Hourly environmental and chemical sensor measurements (CO,
@@ -36,7 +38,32 @@ NOx, NO2, C6H6, temperature, and humidity) will be utilized for synthetic model 
 industrial control systems with labeled anomalies will be used to test streaming throughput
 and evaluate real-time anomaly detectio
 
-### 3. Architecture <br>
+---
+
+## Architecture <br>
 <img src="images/SynStream Architecture.png" alt="SynStream architecture" width="800">
 
-### 4. Docker Deployment Guide
+---
+
+## Flow & Viewer
+
+---
+
+## Docker Deployment Guide
+
+---
+
+## Models & Evaluation
+###Models
+
+###Evaluation
+
+###Results
+
+---
+
+## How to run
+
+---
+
+## References
