@@ -17,13 +17,11 @@ TOPIC_FEATURES_REAL = os.getenv("TOPIC_FEATURES_REAL", "sensors.features.real")
 
 TOPICS = [
     TOPIC_RAW_SENSORS,
-    # Los siguientes tópicos quedan listos para activar cuando se implementen sus parsers:
     # TOPIC_WINDOWED_REAL,
     # TOPIC_FEATURES_REAL,
 ]
 
 def handle_raw_sensors(payload: dict) -> Point:
-    """Guarda las observaciones crudas del replay_producer en InfluxDB."""
     point = Point("sensor_readings").tag("data_source", "real")
 
     for tag_key in ["dataset", "sensor_id"]:
@@ -33,11 +31,15 @@ def handle_raw_sensors(payload: dict) -> Point:
     ts = payload.pop("timestamp", payload.pop("time", None))
     point.time(ts if ts else datetime.now(timezone.utc))
 
-    fields_dict = payload.get("values", payload)
-    if isinstance(fields_dict, dict):
-        for k, v in fields_dict.items():
-            if isinstance(v, (int, float)):
+    features_dict = payload.pop("features", payload.pop("values", {}))
+    if isinstance(features_dict, dict):
+        for k, v in features_dict.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 point.field(k, float(v))
+
+    for k, v in payload.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            point.field(k, float(v))
 
     return point
 
@@ -46,7 +48,6 @@ def process_message(topic: str, payload: dict, write_api):
         point = handle_raw_sensors(payload)
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
 
-    # TODO (Teammate): Add sink logic for windowed, synthetic windows, alerts, and metrics topics
     elif topic == TOPIC_WINDOWED_REAL:
         pass
     elif topic == TOPIC_FEATURES_REAL:
