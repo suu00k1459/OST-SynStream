@@ -113,6 +113,31 @@ services:
 volumes:
   influxdb_data:
 
+
+  river-uci:                       # Pipelines 3 + 4 on UCI (anomaly + drift)
+    build: ./stream_analytics
+    container_name: synstream-river-uci
+    command: ["python", "river_anomaly_drift.py", "--dataset", "uci", "--kafka"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+    networks:
+      - synstream-net
+
+  pipeline5:                       # live real-vs-synthetic window comparison
+    build: ./stream_analytics
+    container_name: synstream-pipeline5
+    command: ["python", "window_comparator.py", "--kafka"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+    networks:
+      - synstream-net
+
 networks:
   synstream-net:
     driver: bridge
