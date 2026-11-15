@@ -8,7 +8,7 @@ from common.config import DATASET_NAME, ACTIVE_SENSORS
 
 # Works both inside Docker (/app/data) and locally on Windows/Mac (./data)
 DEFAULT_DATA_DIR = "/app/data" if os.path.exists("/app") else os.path.join(os.getcwd(), "data")
-UCI_URL = "[https://archive.ics.uci.edu/static/public/360/air+quality.zip](https://archive.ics.uci.edu/static/public/360/air+quality.zip)"
+UCI_URL = "https://archive.ics.uci.edu/static/public/360/air+quality.zip"
 
 
 def load_or_download_dataset(data_dir: str = DEFAULT_DATA_DIR):

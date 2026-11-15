@@ -40,6 +40,7 @@ services:
       KAFKA_BROKER: kafka:9092
       TOPIC_RAW_SENSORS: sensors.raw
       REPLAY_HZ: "5.0"
+      REPLAY_LOOP: "${REPLAY_LOOP:-true}"
     volumes:
       - ./data:/app/data
     depends_on:
