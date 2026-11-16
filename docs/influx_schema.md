@@ -22,7 +22,7 @@ All source timestamps are the original dataset times (2004-2005) and the replay 
 | Measurement | Tags | Fields | Source topic |
 |---|---|---|---|
 | `sensor_readings` (Sebastian) | `dataset`, `data_source` | one field per sensor | `sensors.raw` |
-| `sensor_window` | `dataset`, `stream_type`, `generator`, `sensor` | `value`, `window_id`, `event_time` | `sensors.windowed.real`, `sensors.windowed.synthetic` |
+| `sensor_window` | `dataset`, `stream_type`, `generator`, `sensor` | `value` (normalized), `value_raw`, `window_id`, `event_time` | `sensors.windowed.real`, `sensors.windowed.synthetic` |
 | `anomaly_scores` | `dataset` | `anomaly_score`, `anomaly_threshold`, `max_abs_z`, `missing_sensors`, `is_anomaly`, `forecast_abs_err` | `analytics.scores` |
 | `alerts` | `dataset`, `type`, `sensor`, `detector` | `score`, `max_abs_z`, `trigger_retrain`, `event_time` | `analytics.alerts` |
 | `similarity_metrics` | `dataset`, `generator` | `mmd_score`, `wasserstein`, `acf_diff`, `xcorr_diff`, `forecast_mae_real`, `forecast_mae_syn`, `dcr`, `dcr_ratio`, `pairs_in_metric`, `window_id`, `event_time` | `analytics.metrics` |
