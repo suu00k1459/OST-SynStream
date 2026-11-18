@@ -25,3 +25,21 @@ and evaluate real-time anomaly detectio
 
 ### 3. Architecture <br>
 <img src="images/SynStream Architecture.png" alt="SynStream architecture" width="800">
+
+### Replay mode
+
+Replay loops by default (`REPLAY_LOOP=true`). To replay the dataset once and stop
+without jumping back to 2004, run from PowerShell:
+
+```powershell
+$env:REPLAY_LOOP = "false"
+docker compose up -d --build replay-producer
+```
+
+The producer flushes pending Kafka messages and closes its connection before
+exiting. Set `REPLAY_LOOP` to `true` and rerun the command to restore looping.
+The option also works when running the producer directly as a Python module:
+`python -m ingestion_flink.replay_producer`.
+
+Existing Kafka messages remain available; coordinate consumer offsets with the
+analytics team when starting a fresh experiment.
