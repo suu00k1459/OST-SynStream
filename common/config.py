@@ -8,18 +8,22 @@ TOPIC_RAW_SENSORS = os.getenv("TOPIC_RAW_SENSORS", "sensors.raw")
 TOPIC_WINDOWED_REAL = os.getenv("TOPIC_WINDOWED_REAL", "sensors.windowed.real")
 TOPIC_FEATURES_REAL = os.getenv("TOPIC_FEATURES_REAL", "sensors.features.real")
 TOPIC_WINDOWED_SYN = os.getenv("TOPIC_WINDOWED_SYN", "sensors.windowed.synthetic")
+TOPIC_ANALYTICS_SCORES = os.getenv("TOPIC_ANALYTICS_SCORES", "analytics.scores")
 TOPIC_ANALYTICS_ALERTS = os.getenv("TOPIC_ANALYTICS_ALERTS", "analytics.alerts")
 TOPIC_ANALYTICS_METRICS = os.getenv("TOPIC_ANALYTICS_METRICS", "analytics.metrics")
 
 # Kafka Consumer Group IDs
 GROUP_FLINK_WINDOW = "synstream-flink-window-group"        # Faisal (Pipeline 2)
 GROUP_SYNTHETIC_GEN = "synstream-suyoung-generator-group"  # Suyoung (Pipeline 5 Generator)
-GROUP_RIVER_ANALYTICS = "synstream-hazem-river-group"      # Hazem (Pipelines 3, 4, 5)
+GROUP_RIVER_UCI = "synstream-hazem-river-uci"              # Hazem (Pipelines 3, 4, UCI)
+GROUP_RIVER_HAI = "synstream-hazem-river-hai"              # Hazem (Pipelines 3, 4, HAI)
+GROUP_PIPELINE5 = "synstream-hazem-pipeline5"              # Hazem (Pipeline 5)
 GROUP_INFLUX_SINK = "synstream-hadil-influx-sink-group"    # Hadil (InfluxDB/Grafana Sink)
 
 # Replay & Windowing Parameters
 DATASET_NAME = os.getenv("DATASET_NAME", "UCI_AirQuality")  # "UCI_AirQuality" or "HAI"
 REPLAY_HZ = float(os.getenv("REPLAY_HZ", "5.0"))
+REPLAY_LOOP = os.getenv("REPLAY_LOOP", "true").strip().lower() in ("true", "1", "yes", "on")
 WINDOW_SIZE = int(os.getenv("WINDOW_SIZE", "24"))
 WINDOW_SLIDE = int(os.getenv("WINDOW_SLIDE", "4"))
 
