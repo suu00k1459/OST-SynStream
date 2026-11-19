@@ -90,6 +90,23 @@ services:
       timeout: 5s
       retries: 5
 
+  grafana:                      # dashboards (Issue #8): data source is provisioned automatically
+    image: grafana/grafana:latest
+    container_name: synstream-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: synstream_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./visualization/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks:
+      - synstream-net
+
   influx-sink:
     build:
       context: .
@@ -142,3 +159,4 @@ networks:
 
 volumes:
   influxdb_data:
+  grafana_data:
