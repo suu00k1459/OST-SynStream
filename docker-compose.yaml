@@ -41,6 +41,7 @@ services:
       KAFKA_BROKER: kafka:9092
       TOPIC_RAW_SENSORS: sensors.raw
       REPLAY_HZ: "5.0"
+      REPLAY_LOOP: "${REPLAY_LOOP:-true}"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -88,6 +89,23 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  grafana:                      # dashboards (Issue #8): data source is provisioned automatically
+    image: grafana/grafana:latest
+    container_name: synstream-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: synstream_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./visualization/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks:
+      - synstream-net
 
   influx-sink:
     build:
@@ -153,3 +171,4 @@ networks:
 
 volumes:
   influxdb_data:
+  grafana_data:

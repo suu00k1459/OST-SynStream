@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from kafka import KafkaConsumer
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+from handlers_analytics import handle_message as handle_analytics, HANDLERS as ANALYTICS_HANDLERS
+from handlers_windows import handle_window_message, WINDOW_TOPICS
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
@@ -17,7 +19,8 @@ TOPIC_FEATURES_REAL = os.getenv("TOPIC_FEATURES_REAL", "sensors.features.real")
 
 TOPICS = [
     TOPIC_RAW_SENSORS,
-    # TOPIC_WINDOWED_REAL,
+    *WINDOW_TOPICS,              
+    *ANALYTICS_HANDLERS.keys(),  
     # TOPIC_FEATURES_REAL,
 ]
 
@@ -48,8 +51,16 @@ def process_message(topic: str, payload: dict, write_api):
         point = handle_raw_sensors(payload)
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
 
-    elif topic == TOPIC_WINDOWED_REAL:
-        pass
+    elif topic in WINDOW_TOPICS:
+        points = handle_window_message(topic, payload)
+        if points:
+            write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=points)
+
+    elif topic in ANALYTICS_HANDLERS:
+        point = handle_analytics(topic, payload)
+        if point is not None:
+            write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
+
     elif topic == TOPIC_FEATURES_REAL:
         pass
 
