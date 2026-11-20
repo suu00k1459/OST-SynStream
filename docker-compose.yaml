@@ -141,6 +141,18 @@ services:
     networks:
       - synstream-net
 
+  river-hai:                    # Pipelines 3 + 4 on HAI (anomaly + drift)
+    build: ./stream_analytics
+    container_name: synstream-river-hai
+    command: ["python", "river_anomaly_drift.py", "--dataset", "hai", "--kafka"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+    networks:
+      - synstream-net
+
   pipeline5:                    # live real-vs-synthetic window comparison
     build: ./stream_analytics
     container_name: synstream-pipeline5
