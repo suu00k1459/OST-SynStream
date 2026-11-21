@@ -40,7 +40,8 @@ services:
     environment:
       KAFKA_BROKER: kafka:9092
       TOPIC_RAW_SENSORS: sensors.raw
-      REPLAY_HZ: "5.0"
+      DATASET_NAME: "${DATASET_NAME:-UCI_AirQuality}"
+      REPLAY_HZ: "${REPLAY_HZ:-5.0}"
       REPLAY_LOOP: "${REPLAY_LOOP:-true}"
     volumes:
       - ./data:/app/data
@@ -59,6 +60,7 @@ services:
       KAFKA_BROKER: kafka:9092
       TOPIC_RAW_SENSORS: sensors.raw
       TOPIC_WINDOWED_REAL: sensors.windowed.real
+      DATASET_NAME: "${DATASET_NAME:-UCI_AirQuality}"
       TOPIC_FEATURES_REAL: sensors.features.real
       WINDOW_SIZE: "24"
       WINDOW_SLIDE: "4"
