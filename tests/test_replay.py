@@ -33,6 +33,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual([m["sequence_id"] for m in messages], [0, 1])
         self.assertEqual([m["event_time"] for m in messages], self.frame.event_time.tolist())
         self.assertEqual([m["features"]["CO(GT)"] for m in messages], [2.6, -200.0])
+        self.assertEqual([m["ground_truth_anomaly"] for m in messages], [0, 0])
         self.producer.flush.assert_called_once_with()
         self.producer.close.assert_called_once_with()
 
@@ -84,6 +85,7 @@ class ConfigurationAndDownloadTests(unittest.TestCase):
             self.assertTrue((Path(folder) / "AirQualityUCI.csv").exists())
             self.assertEqual(frame.event_time.tolist(), ["2004-03-10T18:00:00Z"])
             self.assertEqual(sensors, datasets.ACTIVE_SENSORS)
+            self.assertEqual(frame.ground_truth_anomaly.tolist(), [0])
 
 
 if __name__ == "__main__":
