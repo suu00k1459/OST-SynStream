@@ -43,6 +43,7 @@ def run_replay():
                     "event_time": actual_recording_time,
                     "ingest_time": datetime.now(timezone.utc).isoformat(),
                     "dataset": DATASET_NAME,
+                    "ground_truth_anomaly": int(row.get("ground_truth_anomaly", 0)),
                     "features": {col: float(row[col]) for col in cols},
                 }
                 producer.send(
@@ -55,7 +56,7 @@ def run_replay():
                     print(
                         f"Sent seq_id={seq_id} | "
                         f"event_time={actual_recording_time} | "
-                        f"CO(GT)={payload['features']['CO(GT)']}"
+                        f"{cols[0]}={payload['features'][cols[0]]}"
                     )
 
                 seq_id += 1
