@@ -14,7 +14,7 @@ HEALTH_INTERVAL_S = float(os.getenv("HEALTH_INTERVAL_S", "10.0"))
 
 def _parse_event_ts(payload: dict) -> float | None:
     """Attempts to parse an event timestamp into epoch seconds for late-arrival detection."""
-    raw_ts = payload.get("timestamp") or payload.get("end_time") or payload.get("time")
+    raw_ts = payload.get("event_time") or payload.get("timestamp") or payload.get("end_time") or payload.get("time")
     if raw_ts is None:
         return None
     if isinstance(raw_ts, (int, float)) and math.isfinite(raw_ts):
