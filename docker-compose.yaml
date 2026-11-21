@@ -41,6 +41,7 @@ services:
       KAFKA_BROKER: kafka:9092
       TOPIC_RAW_SENSORS: sensors.raw
       REPLAY_HZ: "5.0"
+      REPLAY_LOOP: "${REPLAY_LOOP:-true}"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -101,6 +102,23 @@ services:
       timeout: 5s
       retries: 5
 
+  grafana:                      # dashboards (Issue #8): data source is provisioned automatically
+    image: grafana/grafana:latest
+    container_name: synstream-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: synstream_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./visualization/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    networks:
+      - synstream-net
+
   influx-sink:
     build:
       context: .
@@ -135,6 +153,18 @@ services:
     networks:
       - synstream-net
 
+  river-hai:                    # Pipelines 3 + 4 on HAI (anomaly + drift)
+    build: ./stream_analytics
+    container_name: synstream-river-hai
+    command: ["python", "river_anomaly_drift.py", "--dataset", "hai", "--kafka"]
+    environment:
+      KAFKA_BROKER: kafka:9092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+    networks:
+      - synstream-net
+
   pipeline5:                    # live real-vs-synthetic window comparison
     build: ./stream_analytics
     container_name: synstream-pipeline5
@@ -154,3 +184,4 @@ networks:
 
 volumes:
   influxdb_data:
+  grafana_data:

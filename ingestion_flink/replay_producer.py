@@ -8,6 +8,7 @@ from common.config import (
     TOPIC_RAW_SENSORS,
     DATASET_NAME,
     REPLAY_HZ,
+    REPLAY_LOOP,
 )
 from common.datasets import load_or_download_dataset
 
@@ -32,32 +33,42 @@ def run_replay():
     sleep_interval = 1.0 / max(REPLAY_HZ, 0.1)
 
     seq_id = 0
-    while True:
-        for _, row in df.iterrows():
-            actual_recording_time = str(row["event_time"])
+    try:
+        while True:
+            for _, row in df.iterrows():
+                actual_recording_time = str(row["event_time"])
 
-            payload = {
-                "sequence_id": seq_id,
-                "event_time": actual_recording_time,
-                "ingest_time": datetime.now(timezone.utc).isoformat(),
-                "dataset": DATASET_NAME,
-                "features": {col: float(row[col]) for col in cols},
-            }
-            producer.send(
-                TOPIC_RAW_SENSORS,
-                key=DATASET_NAME.encode("utf-8"),
-                value=payload,
-            )
-
-            if seq_id % 10 == 0:
-                print(
-                    f"Sent seq_id={seq_id} | "
-                    f"event_time={actual_recording_time} | "
-                    f"CO(GT)={payload['features']['CO(GT)']}"
+                payload = {
+                    "sequence_id": seq_id,
+                    "event_time": actual_recording_time,
+                    "ingest_time": datetime.now(timezone.utc).isoformat(),
+                    "dataset": DATASET_NAME,
+                    "features": {col: float(row[col]) for col in cols},
+                }
+                producer.send(
+                    TOPIC_RAW_SENSORS,
+                    key=DATASET_NAME.encode("utf-8"),
+                    value=payload,
                 )
 
-            seq_id += 1
-            time.sleep(sleep_interval)
+                if seq_id % 10 == 0:
+                    print(
+                        f"Sent seq_id={seq_id} | "
+                        f"event_time={actual_recording_time} | "
+                        f"CO(GT)={payload['features']['CO(GT)']}"
+                    )
+
+                seq_id += 1
+                time.sleep(sleep_interval)
+
+            if not REPLAY_LOOP:
+                print(f"[Replay Producer] One pass complete ({seq_id} records); stopping.")
+                break
+    finally:
+        try:
+            producer.flush()
+        finally:
+            producer.close()
 
 
 if __name__ == "__main__":
