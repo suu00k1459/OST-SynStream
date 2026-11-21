@@ -1,9 +1,9 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 .venv/
 .env
-data/*.csv
-data/*.zip
+# Local datasets and generated splits, including data/hai-22.04/test1.csv
+/data/
 models/
 .DS_Store
 # PyCharm settings
@@ -15,5 +15,3 @@ stream_analytics/Processed/
 stream_analytics/processed/
 stream_analytics/results/*_train_windows.npy
 stream_analytics/results/uci_scaler.npz
-
-data/
