@@ -1,7 +1,8 @@
 """
-Stream downsampling for sensors.raw -> InfluxDB (measurement: sensor_downsampled_1m).
-Computes per-minute mean, min, max, and count per (dataset, sensor).
-Includes Steinarsson (2013) LTTB implementation for visual downsampling.
+Stream downsampling for sensors.raw -> InfluxDB.
+Writes:
+  - sensor_downsampled_1m: per-minute mean, min, max, and count per (dataset, sensor).
+  - sensor_lttb: visually downsampled points using Steinarsson (2013) LTTB.
 """
 import math
 import os
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 from influxdb_client import Point
 
 DOWNSAMPLE_INTERVAL_S = float(os.getenv("DOWNSAMPLE_INTERVAL_S", "60.0"))
+LTTB_THRESHOLD = int(os.getenv("LTTB_THRESHOLD", "15"))
 
 
 def _is_valid_number(v) -> bool:
@@ -58,14 +60,15 @@ def lttb_downsample(data: list[tuple[float, float]], threshold: int) -> list[tup
 
 
 class StreamDownsampler:
-    def __init__(self, interval_s: float = DOWNSAMPLE_INTERVAL_S):
+    def __init__(self, interval_s: float = DOWNSAMPLE_INTERVAL_S, lttb_threshold: int = LTTB_THRESHOLD):
         self.interval_s = interval_s
+        self.lttb_threshold = lttb_threshold
         self.last_flush = time.monotonic()
-        # key: (dataset, sensor_name) -> list of float values
-        self.buffer: dict[tuple[str, str], list[float]] = defaultdict(list)
+        # key: (dataset, sensor_name) -> list of (epoch_seconds, float_value)
+        self.buffer: dict[tuple[str, str], list[tuple[float, float]]] = defaultdict(list)
 
     def add(self, payload: dict) -> None:
-        """Extracts numeric sensor readings from a sensors.raw payload."""
+        """Extracts numeric sensor readings with arrival timestamp from a sensors.raw payload."""
         dataset = str(payload.get("dataset", "unknown"))
         features = payload.get("features") or payload.get("values")
 
@@ -74,12 +77,13 @@ class StreamDownsampler:
         else:
             source = {k: v for k, v in payload.items() if k not in ("sequence_id", "window_id")}
 
+        now_epoch = time.time()
         for sensor, val in source.items():
             if _is_valid_number(val):
-                self.buffer[(dataset, str(sensor))].append(float(val))
+                self.buffer[(dataset, str(sensor))].append((now_epoch, float(val)))
 
     def flush_if_ready(self, write_api, bucket: str, org: str) -> int:
-        """Writes per-minute mean/min/max points if the interval has elapsed."""
+        """Writes per-minute mean/min/max and LTTB-reduced points if the interval has elapsed."""
         now_mono = time.monotonic()
         if (now_mono - self.last_flush) < self.interval_s:
             return 0
@@ -90,10 +94,13 @@ class StreamDownsampler:
 
         ts = datetime.now(timezone.utc)
         points = []
-        for (dataset, sensor), values in self.buffer.items():
-            if not values:
+        for (dataset, sensor), series in self.buffer.items():
+            if not series:
                 continue
-            p = (
+
+            # 1. Per-minute aggregates (mean / min / max / count)
+            values = [v for _, v in series]
+            p_agg = (
                 Point("sensor_downsampled_1m")
                 .tag("dataset", dataset)
                 .tag("sensor", sensor)
@@ -103,7 +110,19 @@ class StreamDownsampler:
                 .field("count", int(len(values)))
                 .time(ts)
             )
-            points.append(p)
+            points.append(p_agg)
+
+            # 2. Visual downsampling with LTTB
+            reduced = lttb_downsample(series, self.lttb_threshold)
+            for pt_ts, pt_val in reduced:
+                p_lttb = (
+                    Point("sensor_lttb")
+                    .tag("dataset", dataset)
+                    .tag("sensor", sensor)
+                    .field("value", float(pt_val))
+                    .time(datetime.fromtimestamp(pt_ts, tz=timezone.utc))
+                )
+                points.append(p_lttb)
 
         self.buffer.clear()
         if points:
