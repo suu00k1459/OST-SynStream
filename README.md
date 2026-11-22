@@ -86,3 +86,69 @@ The option also works when running the producer directly as a Python module:
 
 Existing Kafka messages remain available; coordinate consumer offsets with the
 analytics team when starting a fresh experiment.
+
+### HAI 22.04 replay
+
+Place the original HAI 22.04 `test1.csv` in `data/hai-22.04/` locally
+(`/app/data/hai-22.04/test1.csv` inside the replay container). Data files are not
+committed. Missing files, required columns, invalid labels, and invalid or
+out-of-order timestamps fail with an explanatory error before Kafka connects.
+
+HAI replay preserves the source timestamp text as `event_time`, sets `dataset`
+to `HAI`, and publishes the agreed 15 sensors in `features`. Every raw message
+also contains `ground_truth_anomaly`: HAI's `Attack` (0/1), or 0 for UCI.
+Flink emits 24-by-15 HAI windows using the existing window/feature schemas.
+Windows count observations: 24 HAI observations represent 24 seconds, whereas
+24 hourly UCI observations represent 24 hours.
+
+Run the regression tests locally:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Configure a one-pass HAI run in the same PowerShell session:
+
+```powershell
+$env:DATASET_NAME = "HAI"
+$env:REPLAY_HZ = "100"
+$env:REPLAY_LOOP = "false"
+docker compose config --quiet
+docker compose build replay-producer flink-processor river-hai
+docker compose stop replay-producer flink-processor river-uci
+docker compose up -d kafka kafka-ui
+```
+
+Wait until the following Kafka command succeeds, then start the consumers before
+replay. `--no-deps` prevents Flink's dependency from starting replay prematurely.
+
+```powershell
+docker exec synstream-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+docker compose up -d --no-deps --force-recreate flink-processor river-hai
+docker compose logs --tail 30 flink-processor river-hai
+```
+
+Allow Flink and River to initialize and check their logs before starting replay:
+
+```powershell
+docker compose up -d --no-deps --force-recreate replay-producer
+docker compose logs --tail 20 replay-producer flink-processor river-hai
+docker compose ps -a
+```
+
+Flink still uses latest starting offsets, so this sequence reduces startup loss
+but is not a strict readiness guarantee. Existing Kafka history and saved River
+consumer offsets must be coordinated separately for a clean experiment.
+
+Check `sensors.raw` for HAI timestamps, 15 features and 0/1 labels;
+`sensors.windowed.real` for 24-by-15 windows; `sensors.features.real` for 15
+sensor summaries; and `analytics.scores` / `analytics.alerts` for River outputs.
+Raw missing values may use -200; Flink performs causal imputation.
+
+For 86,400 input rows, one pass takes at least 14.4 minutes at 100 Hz or 7.2
+minutes at 200 Hz, plus overhead. Successful completion logs the actual row
+count and exits with code 0. These are pacing targets, not measured throughput.
+Use the original data first; artificial drift injection is not enabled.
+
+To restore UCI settings, set `DATASET_NAME=UCI_AirQuality` and `REPLAY_HZ=5`
+in PowerShell, then recreate replay and Flink and select `river-uci`.

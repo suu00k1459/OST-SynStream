@@ -14,6 +14,8 @@ UCI_URL = "https://archive.ics.uci.edu/static/public/360/air+quality.zip"
 def load_or_download_dataset(data_dir: str = DEFAULT_DATA_DIR):
     """Downloads and loads the active dataset with zero Kafka dependencies."""
     os.makedirs(data_dir, exist_ok=True)
+    if DATASET_NAME == "HAI":
+        return load_hai_dataset(data_dir)
     uci_csv_path = os.path.join(data_dir, "AirQualityUCI.csv")
 
     if not os.path.exists(uci_csv_path):
@@ -47,6 +49,34 @@ def load_or_download_dataset(data_dir: str = DEFAULT_DATA_DIR):
     for col in ACTIVE_SENSORS:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-200.0)
 
+    df["ground_truth_anomaly"] = 0
+    return df, ACTIVE_SENSORS
+
+
+def load_hai_dataset(data_dir: str):
+    """Load local HAI 22.04 test1 without downloading or committing the data."""
+    path = os.path.join(data_dir, "hai-22.04", "test1.csv")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"HAI 22.04 file missing: {path}. Place test1.csv there locally.")
+    df = pd.read_csv(path)
+    df.columns = df.columns.str.strip()
+    lookup = {col.lower(): col for col in df.columns}
+    timestamp = lookup.get("timestamp") or lookup.get("time")
+    attack = lookup.get("attack")
+    missing = [col for col in ACTIVE_SENSORS if col not in df.columns]
+    if timestamp is None or attack is None or missing:
+        raise ValueError(f"Invalid HAI 22.04 schema: timestamp={timestamp}, Attack={attack}, missing sensors={missing}")
+    times = pd.to_datetime(df[timestamp], errors="coerce")
+    if df.empty or times.isna().any() or not times.is_monotonic_increasing:
+        raise ValueError("HAI timestamps must be nonempty, valid and chronological")
+    labels = pd.to_numeric(df[attack], errors="coerce")
+    if not labels.isin([0, 1]).all():
+        raise ValueError("HAI Attack must contain only 0 or 1")
+    # Preserve the original timestamp text; do not invent a timezone.
+    df["event_time"] = df[timestamp].astype(str)
+    df["ground_truth_anomaly"] = labels.astype(int)
+    for col in ACTIVE_SENSORS:
+        df[col] = pd.to_numeric(df[col], errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(-200.0)
     return df, ACTIVE_SENSORS
 
 

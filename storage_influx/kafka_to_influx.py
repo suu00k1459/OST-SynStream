@@ -6,6 +6,8 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from handlers_analytics import handle_message as handle_analytics, HANDLERS as ANALYTICS_HANDLERS
 from handlers_windows import handle_window_message, WINDOW_TOPICS
+from downsampler import StreamDownsampler
+from health_monitor import StreamHealthMonitor
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:9092")
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
@@ -76,10 +78,19 @@ def main():
         group_id="influx-sink-group"
     )
 
+    downsampler = StreamDownsampler()
+    health_monitor = StreamHealthMonitor()
+
     print(f"InfluxDB Sink running. Listening to topics: {TOPICS}")
     for msg in consumer:
         try:
-            process_message(msg.topic, msg.value, write_api)
+            payload = msg.value
+            health_monitor.record(msg.topic, payload)
+            if msg.topic == TOPIC_RAW_SENSORS:
+                downsampler.add(payload)
+            process_message(msg.topic, payload, write_api)
+            health_monitor.flush_if_ready(consumer, write_api, INFLUX_BUCKET, INFLUX_ORG)
+            downsampler.flush_if_ready(write_api, INFLUX_BUCKET, INFLUX_ORG)
         except Exception as e:
             print(f"Error processing message from {msg.topic}: {e}")
 

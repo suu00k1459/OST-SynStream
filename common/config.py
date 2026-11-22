@@ -39,8 +39,9 @@ DATASET_CONFIGS = {
     },
     "HAI": {
         "sensors": [
-            "P1_B2004", "P1_B2016", "P1_B3004", "P1_B3005", "P1_B4002",
-            "P1_FT01", "P1_FT02", "P1_PIT01", "P1_TIT01", "P2_SIT01"
+            "P1_FT01", "P1_FT02", "P1_FT03", "P1_LIT01", "P1_PIT01", "P1_PIT02",
+            "P1_TIT02", "P1_TIT03", "P2_VIBTR01", "P2_VIBTR02", "P2_VIBTR03",
+            "P2_VIBTR04", "P3_FIT01", "P3_LIT01", "P3_PIT01"
         ],
         "label_col": "Attack",
     },
