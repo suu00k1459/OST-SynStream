@@ -72,16 +72,18 @@ services:
 
   synthetic-generator:
     build:
-      context: .                            
-      dockerfile: synthetic_gen/Dockerfile  
+      context: .
+      dockerfile: synthetic_gen/Dockerfile
     environment:
-      GENERATOR: TimeVAE                    
+      GENERATOR: TimeVAE
+      MODEL_FILE: "${MODEL_FILE:-}"
     volumes:
-      - ./synthetic_gen/models:/app/synthetic_gen/models 
+      - ./synthetic_gen/models:/app/synthetic_gen/models
     depends_on:
       - kafka
     networks:
       - synstream-net
+
   influxdb:
     image: influxdb:2.7
     container_name: synstream-influxdb
