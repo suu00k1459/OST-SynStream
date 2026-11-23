@@ -20,6 +20,9 @@ from common.config import (                      # noqa: E402  (shared team cont
     GROUP_SYNTHETIC_GEN, DATASET_NAME, WINDOW_SIZE, WINDOW_SLIDE,
 )
 
+MODEL_FILE = os.getenv("MODEL_FILE")             # e.g. "timevae_hai.pt" (inside models/); unset = default per generator
+RETRAIN_ON = "hai" not in (MODEL_FILE or "").lower()   # HAI model: never retrain (an attack can look like drift)
+
 MODEL_FILES = {
     "TimeVAE": ROOT / "models" / "timevae_uci.pt",
     "TimeGAN": ROOT / "models" / "timegan_uci.pt",
@@ -33,7 +36,7 @@ MODEL_FILES = {
 def load_generator(name):
     """Rebuilds the model from its .pt file and returns (generate_fn, checkpoint).
     generate_fn(n) -> numpy array (n, seq_len, n_features), same z-scale as X_train."""
-    path = MODEL_FILES[name]
+    path = ROOT / "models" / MODEL_FILE if MODEL_FILE else MODEL_FILES[name]
     if not path.exists():
         sys.exit(f"Model file not found: {path}\nTrain it first with the matching train_*.py script.")
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
@@ -176,6 +179,10 @@ def run_live(generator, every):
     from kafka import KafkaConsumer, KafkaProducer
 
     generate_fn, ckpt, model = load_generator(generator)
+    group_id = f"{GROUP_SYNTHETIC_GEN}-{generator.lower()}"
+    if MODEL_FILE:                                  # separate bookmark for the HAI service
+        group_id += "-" + Path(MODEL_FILE).stem
+
     recent = deque(maxlen=200)                     # 최근 진짜 윈도우 200개 (재학습 재료)
     mean = np.asarray(ckpt["scaler_mean"], dtype=np.float32)
     std = np.asarray(ckpt["scaler_std"], dtype=np.float32)
@@ -184,7 +191,7 @@ def run_live(generator, every):
     consumer = connect(lambda: KafkaConsumer(
         TOPIC_WINDOWED_REAL,TOPIC_ANALYTICS_ALERTS,
         bootstrap_servers=KAFKA_BROKER,
-        group_id=f"{GROUP_SYNTHETIC_GEN}-{generator.lower()}",   # one group per generator
+        group_id=group_id,   # one group per generator
         auto_offset_reset="earliest",
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
     ), "consumer")
@@ -199,13 +206,15 @@ def run_live(generator, every):
         if record.topic == TOPIC_ANALYTICS_ALERTS:
             alert = record.value
             if (alert.get("type") == "DRIFT" and alert.get("trigger_retrain")
-                    and generator == "TimeVAE" and len(recent) >= 50):
+                    and generator == "TimeVAE" and len(recent) >= 50 and RETRAIN_ON
+                    and "hai" not in str(alert.get("dataset", "")).lower()) :
                 print(f"Drift alert on {alert.get('sensor')} -> retraining")
                 retrain_vae(model, list(recent), ckpt["config"])
             continue
 
         real = record.value
-        check_sensors(real, ckpt)
+        if list(real.get("sensor_names", [])) != list(ckpt["sensor_names"]):
+            continue
         z = (np.asarray(real["data_raw"], dtype=np.float32) - mean) / std
         recent.append(np.clip(z, -clip, clip))
 
