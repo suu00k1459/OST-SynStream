@@ -41,6 +41,8 @@ PENDING_MAX_AGE = int(os.getenv("PENDING_MAX_AGE", "2000"))  # records an alert 
 def norm_ts(value) -> str:
     """Same text for the same moment: '2021-07-10T07:20:00.000' and '2021-07-10 07:20:00' match."""
     text = str(value).strip().replace("T", " ")
+    if text.endswith("Z"):
+        text = text[:-1]
     if "." in text:
         head, frac = text.split(".", 1)
         if frac.strip("0") == "":
@@ -48,9 +50,17 @@ def norm_ts(value) -> str:
     return text
 
 
-def dataset_wanted(name) -> bool:
+def dataset_key(name):
+    """'HAI', 'hai' or 'HAI-22.04' -> 'HAI' (the entry of EVAL_DATASETS it starts with); None if not evaluated."""
     name = str(name or "").upper()
-    return any(name.startswith(d) for d in EVAL_DATASETS)
+    for d in EVAL_DATASETS:
+        if name.startswith(d):
+            return d
+    return None
+
+
+def dataset_wanted(name) -> bool:
+    return dataset_key(name) is not None
 
 
 class DatasetState:
@@ -161,7 +171,7 @@ class Evaluator:
         self.states = {}
 
     def state(self, dataset) -> DatasetState:
-        key = str(dataset)
+        key = dataset_key(dataset) or str(dataset)
         if key not in self.states:
             self.states[key] = DatasetState()
         return self.states[key]
