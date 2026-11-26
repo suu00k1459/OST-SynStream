@@ -247,10 +247,18 @@ def run():
     client = InfluxDBClient(url=os.getenv("INFLUX_URL", "http://influxdb:8086"),
                             token=os.getenv("INFLUX_TOKEN", "synstream-secret-token"), org=org)
     write_api = client.write_api(write_options=SYNCHRONOUS)
-    consumer = KafkaConsumer(
-        topic_raw, topic_alerts, bootstrap_servers=[broker],
-        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        auto_offset_reset="latest", group_id="synstream-hadil-alert-eval")
+    from kafka.errors import NoBrokersAvailable
+    while True:                                   # Kafka may start slowly: wait instead of crashing
+        try:
+            consumer = KafkaConsumer(
+                topic_raw, topic_alerts, bootstrap_servers=[broker],
+                value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+                auto_offset_reset="latest", group_id="synstream-hadil-alert-eval",
+                api_version_auto_timeout_ms=30000)
+            break
+        except NoBrokersAvailable:
+            print(f"[alert-eval] Kafka not ready at {broker}, retrying in 5 s")
+            time.sleep(5)
     ev = Evaluator()
     print(f"[alert-eval] {topic_raw} + {topic_alerts}, datasets={EVAL_DATASETS}, "
           f"tolerance={TOLERANCE}, alert types={sorted(ALERT_TYPES)}")
