@@ -62,7 +62,7 @@ Field types stay fixed so writes never conflict (integers for counts, floats for
 | `feature` (v6) | window feature name, default `mean`, `std` (set by the `FEATURES` variable of `feature-summaries`) |
 | `event_id` (v6) | running number of the attack event within a run |
 | `sensor` (UCI, 12) | `CO(GT)`, `PT08.S1(CO)`, `C6H6(GT)`, `PT08.S2(NMHC)`, `NOx(GT)`, `PT08.S3(NOx)`, `NO2(GT)`, `PT08.S4(NO2)`, `PT08.S5(O3)`, `T`, `RH`, `AH` |
-| `sensor` (HAI) | `P1_B2004`, `P1_B2016`, `P1_B3004`, `P1_B3005`, `P1_B4002`, `P1_FT01`, `P1_FT02`, `P1_PIT01`, `P1_TIT01`, `P2_SIT01` |
+| `sensor` (HAI, 15) | `P1_FT01`, `P1_FT02`, `P1_FT03`, `P1_LIT01`, `P1_PIT01`, `P1_PIT02`, `P1_TIT02`, `P1_TIT03`, `P2_VIBTR01`, `P2_VIBTR02`, `P2_VIBTR03`, `P2_VIBTR04`, `P3_FIT01`, `P3_LIT01`, `P3_PIT01` (from `stream_analytics/results/hai_sensors.json`) |
 | `sensor` (DRIFT alerts) | a sensor name, or `forecast_error` |
 
 ## Batch results (not stored in InfluxDB)
@@ -73,7 +73,9 @@ Batch 2 and Batch 3 results are static tables (`evaluation_results.csv`, `batch3
 
 - Windows overlap (size 24, slide 4): only the last 4 rows of each window should be written.
 - Sensor names contain parentheses: always quote them in Flux queries.
-- `dcr` and `dcr_ratio` only appear when training windows are available to Hazem's service.
+- `dcr` and `dcr_ratio` only appear when training windows are available to Hazem's service. Checked in the real HAI run (HAI 22.04 test1.csv): both are written for `HAI`; for `UCI_AirQuality` only a few points exist.
+- In the real HAI run only the generator `TimeVAE` is streamed (`generator` tag).
+- Sensor names depend on the dataset: a Grafana `sensor` variable that still holds a UCI sensor (e.g. `AH`) shows no data on `dataset=HAI`.
 - `alert_evaluation` and `attack_event` need the HAI replay (`DATASET_NAME=HAI`, `river-hai`, `data/hai-22.04/test1.csv`). Training files of HAI contain no attacks.
 - Dashboards for the v6 measurements: `synstream-hai-eval.json` and `synstream-feature-bands.json` in `visualization/grafana/provisioning/dashboards/`.
 
