@@ -1,5 +1,14 @@
 # OST-SynStream
 
+Faisal's dashboard: **SynStream - Faisal: Ingestion & Windowing Health**
+(`/d/synstream-faisal-ingestion` in Grafana). It follows Pipelines 1 and 2 with
+dataset/sensor selectors and 5-second refresh: raw versus imputed readings,
+running normalized values, missing sentinel share, window IDs and replay
+sequence IDs. Shared sink-health panels cover all datasets and report throughput,
+consumer-position lag, null/nonfinite counts and backward source timestamps.
+Panel descriptions distinguish these from producer throughput, database-delivery
+guarantees and wall-clock latency. After replay ends, select its run time range.
+
 ### Bash launchers: one dataset at a time
 
 ```bash
