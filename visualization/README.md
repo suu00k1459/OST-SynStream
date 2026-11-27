@@ -58,19 +58,27 @@ Result of one run (86,400 records): 7 attack events, 3 detected by the ANOMALY a
 
 ## Streamlit app
 
+With Docker (from the repository root), then open http://localhost:8501:
+
 ```
-pip install streamlit pandas numpy scikit-learn
+docker compose -f visualization/streamlit_app/docker-compose.yml up --build -d
+```
+
+Without Docker:
+
+```
+pip install -r visualization/streamlit_app/requirements.txt
 streamlit run visualization/streamlit_app/app.py
 ```
 
-Tabs: Batch 2 (similarity), Batch 3 (forecasting), PCA / t-SNE of real against synthetic windows. These are static results, not live data.
+The result files are read from `stream_analytics/results/` and `synthetic_gen/outputs/`. Tabs: Batch 2 (similarity), Batch 3 (forecasting), PCA / t-SNE of real against synthetic windows. These are static results, not live data.
 
 ## Status
 
 - Tested end to end on the real streams, from a fresh download with a clean Docker setup: UCI (full stack) and HAI 22.04 `test1.csv` (full stack with `run_hai.sh`). Both stages and all Grafana dashboards of this folder showed data on HAI.
 - Earlier tests used the mock producer (simulated data).
 - Not verified: the LTTB dashboards without the manual loader (Sebastian), and the fine-tuning recovery of the generator (measured by Hazem, mixed result).
-- Streamlit: PCA / t-SNE tab is new; containerizing the app is not done.
+- Streamlit: all three tabs checked on the real result files (PCA and t-SNE on HAI and UCI), also inside the Docker container. The service is not in the main `docker-compose.yaml` (separate compose file).
 - Task list: GitHub Issues.
 
 ## Local development setup (Issue #2)
