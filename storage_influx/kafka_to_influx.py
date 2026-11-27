@@ -1,7 +1,9 @@
 import os
 import json
+import time
 from datetime import datetime, timezone
 from kafka import KafkaConsumer
+from kafka.errors import NoBrokersAvailable
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from handlers_analytics import handle_message as handle_analytics, HANDLERS as ANALYTICS_HANDLERS
@@ -66,17 +68,27 @@ def process_message(topic: str, payload: dict, write_api):
     elif topic == TOPIC_FEATURES_REAL:
         pass
 
+def connect_consumer():
+    """Wait for Kafka during startup; leave configuration errors visible."""
+    while True:
+        try:
+            return KafkaConsumer(
+                *TOPICS,
+                bootstrap_servers=[KAFKA_BROKER],
+                value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+                auto_offset_reset="latest",
+                group_id="influx-sink-group",
+                api_version_auto_timeout_ms=30000,
+            )
+        except NoBrokersAvailable:
+            print(f"[influx-sink] Kafka not ready at {KAFKA_BROKER}; retrying in 5 s", flush=True)
+            time.sleep(5)
+
+
 def main():
+    consumer = connect_consumer()
     client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
     write_api = client.write_api(write_options=SYNCHRONOUS)
-
-    consumer = KafkaConsumer(
-        *TOPICS,
-        bootstrap_servers=[KAFKA_BROKER],
-        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-        auto_offset_reset="latest",
-        group_id="influx-sink-group"
-    )
 
     downsampler = StreamDownsampler()
     health_monitor = StreamHealthMonitor()

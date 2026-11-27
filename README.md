@@ -1,4 +1,18 @@
 # OST-SynStream
+
+The InfluxDB sink waits and retries every five seconds if Kafka is unavailable
+at startup. Compose also restarts the sink after an unexpected exit. Rebuild
+and recreate it after source changes:
+
+```bash
+docker compose build influx-sink
+docker compose up -d --no-deps --force-recreate influx-sink
+docker compose logs --tail 30 influx-sink
+```
+
+The sink resumes its existing Kafka consumer group offsets, so retained data may
+take time to drain before new points appear. This startup fix does not provide
+exactly-once delivery or change the existing handling of database write errors.
 Synthetic Time-Series Analytics and Real-Time Monitoring
 
 ### Group members: <br>
