@@ -1,0 +1,18 @@
+# Streamlit results app (Batch 2 / Batch 3 / PCA-t-SNE). Static files only: it needs no Kafka and no InfluxDB,
+# so it is independent of the main stack and can run next to it.
+#
+# From the repository root:
+#   docker compose -f visualization/streamlit_app/docker-compose.yml up --build -d
+# Then open http://localhost:8501
+services:
+  streamlit:
+    build:
+      context: ../..
+      dockerfile: visualization/streamlit_app/Dockerfile
+    container_name: synstream-streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../../stream_analytics:/app/stream_analytics:ro
+      - ../../synthetic_gen:/app/synthetic_gen:ro
+    restart: unless-stopped
