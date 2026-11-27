@@ -36,9 +36,12 @@ import time
 from datetime import datetime, timedelta
 
 DATASET = os.getenv("MOCK_DATASET", "HAI")
-SENSORS = ["P1_B2004", "P1_FT01", "P1_PIT01"]
-BASE = {"P1_B2004": 0.1, "P1_FT01": 200.0, "P1_PIT01": 1.5}
-SCALE = {"P1_B2004": 0.02, "P1_FT01": 5.0, "P1_PIT01": 0.05}
+# The 15 HAI sensors agreed by the team (stream_analytics/results/hai_sensors.json).
+SENSORS = ["P1_FT01", "P1_FT02", "P1_FT03", "P1_LIT01", "P1_PIT01", "P1_PIT02", "P1_TIT02", "P1_TIT03",
+           "P2_VIBTR01", "P2_VIBTR02", "P2_VIBTR03", "P2_VIBTR04", "P3_FIT01", "P3_LIT01", "P3_PIT01"]
+# Simulated levels (NOT real HAI values): any value works, the mock only checks the pipeline.
+BASE = {s: 10.0 + 5.0 * k for k, s in enumerate(SENSORS)}
+SCALE = {s: 0.5 + 0.1 * k for k, s in enumerate(SENSORS)}
 ATTACKS = [(400, 440), (1000, 1050), (1800, 1830)]          # [start, end) in records
 ALERT_AT = {200, 410, 1005, 1030, 1400, 2400}              # records that get an alert: 3 inside attacks, 3 false alarms
 N_RECORDS = 3000
