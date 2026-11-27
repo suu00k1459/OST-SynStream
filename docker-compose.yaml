@@ -72,16 +72,18 @@ services:
 
   synthetic-generator:
     build:
-      context: .                            
-      dockerfile: synthetic_gen/Dockerfile  
+      context: .
+      dockerfile: synthetic_gen/Dockerfile
     environment:
-      GENERATOR: TimeVAE                    
+      GENERATOR: TimeVAE
+      MODEL_FILE: "${MODEL_FILE:-}"
     volumes:
-      - ./synthetic_gen/models:/app/synthetic_gen/models 
+      - ./synthetic_gen/models:/app/synthetic_gen/models
     depends_on:
       - kafka
     networks:
       - synstream-net
+
   influxdb:
     image: influxdb:2.7
     container_name: synstream-influxdb
@@ -175,6 +177,51 @@ services:
       KAFKA_BROKER: kafka:9092
     depends_on:
       - kafka
+    restart: unless-stopped
+    networks:
+      - synstream-net
+
+  feature-summaries:           # stage 2 (Hadil): t-digest feature summaries -> InfluxDB feature_bands
+    build:
+      context: .
+      dockerfile: stream_summaries/Dockerfile
+    container_name: synstream-feature-summaries
+    environment:
+      KAFKA_BROKER: kafka:9092
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: synstream-secret-token
+      INFLUX_ORG: synstream_org
+      INFLUX_BUCKET: synstream_bucket
+      TOPIC_FEATURES_REAL: sensors.features.real
+      FEATURES: "mean,std"
+    depends_on:
+      kafka:
+        condition: service_started
+      influxdb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - synstream-net
+
+  alert-eval:                   # stage 1 (Hadil): online alert evaluation (HAI) -> InfluxDB alert_evaluation / attack_event
+    build:
+      context: .
+      dockerfile: alert_evaluation/Dockerfile
+    container_name: synstream-alert-eval
+    environment:
+      KAFKA_BROKER: kafka:9092
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: synstream-secret-token
+      INFLUX_ORG: synstream_org
+      INFLUX_BUCKET: synstream_bucket
+      TOPIC_RAW_SENSORS: sensors.raw
+      TOPIC_ANALYTICS_ALERTS: analytics.alerts
+      EVAL_DATASETS: "HAI"
+    depends_on:
+      kafka:
+        condition: service_started
+      influxdb:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - synstream-net

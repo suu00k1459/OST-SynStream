@@ -77,7 +77,7 @@ def _new_forecaster():
 
 class WindowComparator:
     def __init__(self, target_idx: int = 0, k: int = 10, mae_window: int = 50,
-                 train_windows=None, max_buffer: int = 1000):
+                 train_windows=None, max_buffer: int = 20000):
         self.t = target_idx
         self.k = k
         self.mae_window = mae_window
@@ -322,7 +322,7 @@ def run_kafka(bootstrap, group="synstream-hazem-pipeline5", idle_exit=None):
             value = normalize_window(msg.value)
             if msg.topic == "sensors.windowed.real":
                 window_ts[(ds, value["window_id"])] = value.get("end_ts") or value.get("end_time")
-                while len(window_ts) > 5000:
+                while len(window_ts) > 20000:
                     window_ts.popitem(last=False)
                 results = comps[ds].add_real(value)
             else:
