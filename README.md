@@ -1,4 +1,47 @@
 # OST-SynStream
+
+### Bash launchers: one dataset at a time
+
+```bash
+bash run_uci.sh start --build  # build and start UCI, TimeVAE, analytics and storage
+bash run_hai.sh start --build  # switch to HAI and its TimeVAE checkpoint
+```
+
+After building, use `start` without `--build`. Both launchers support `build`,
+`test`, `logs`, `status`, and `stop`; for example `bash run_hai.sh logs`.
+They share `run_pipeline.sh`. UCI defaults to 5 Hz, HAI to 100 Hz, and both
+force one-pass replay. Override the rate for one invocation with
+`REPLAY_HZ=200 bash run_hai.sh start`.
+
+Starting either dataset stops the shared application services and the other
+River service before recreating the selected pipeline. They are not simultaneous
+launchers. HAI requires the local `data/hai-22.04/test1.csv` and
+`synthetic_gen/models/timevae_hai.pt`; UCI selects `timevae_uci.pt`.
+Both start feature summaries; HAI additionally starts alert evaluation.
+
+The launchers check Kafka, allow consumers 30 seconds to initialize, and check
+that their containers are running before starting replay. Container state is
+not a strict Flink readiness guarantee. Existing Kafka offsets/history and
+database records are retained. `stop` shuts down the shared infrastructure
+without deleting data. `test` runs the suite against a read-only bind mount
+of this checkout in the replay image; build that image first.
+
+Verify stored measurements and dashboards separately after startup. A successful
+launcher does not establish that the whole experiment or replay has completed.
+
+The InfluxDB sink waits and retries every five seconds if Kafka is unavailable
+at startup. Compose also restarts the sink after an unexpected exit. Rebuild
+and recreate it after source changes:
+
+```bash
+docker compose build influx-sink
+docker compose up -d --no-deps --force-recreate influx-sink
+docker compose logs --tail 30 influx-sink
+```
+
+The sink resumes its existing Kafka consumer group offsets, so retained data may
+take time to drain before new points appear. This startup fix does not provide
+exactly-once delivery or change the existing handling of database write errors.
 Synthetic Time-Series Analytics and Real-Time Monitoring
 
 ### Group members: <br>

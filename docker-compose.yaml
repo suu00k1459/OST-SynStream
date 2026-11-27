@@ -124,6 +124,7 @@ services:
       - synstream-net
 
   influx-sink:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: storage_influx/Dockerfile
