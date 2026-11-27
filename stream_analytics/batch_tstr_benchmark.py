@@ -21,6 +21,10 @@ Usage
   python batch_tstr_benchmark.py --hai-train "data/hai/train*.csv" --hai-test "data/hai/test*.csv"
   python batch_tstr_benchmark.py --uci data/AirQualityUCI.csv \
          --uci-synthetic results/uci_timegan.npy:TimeGAN results/uci_timevae.npy:TimeVAE
+  # on the stream PERSISTED IN INFLUXDB (after a UCI replay run; the data store
+  # is read as static data, the CSV is not used):
+  python batch_tstr_benchmark.py --uci-from-influx \
+         --uci-synthetic ../synthetic_gen/outputs/uci_timevae.npy:TimeVAE
   # with the team's shared split file (Faisal's prepare_batch_splits.py):
   python batch_tstr_benchmark.py --uci-splits ../data/splits/UCI_AirQuality_windows.npz \
          --uci-synthetic results/uci_timegan.npy:TimeGAN
@@ -42,6 +46,73 @@ import data_loading as dl
 from metrics import compare_windows, placeholder_synthetic
 
 OUT = os.path.join(os.path.dirname(__file__), "results")
+
+UCI_N_ROWS = 9357                                   # rows in AirQualityUCI.csv (one replay pass)
+UCI_FIRST_TS = pd.Timestamp("2004-03-10 18:00:00")  # time of the first row (sequence_id 0)
+
+
+# ======================================================================
+# Reading the persisted stream back from InfluxDB (the data store)
+# ======================================================================
+def fetch_sensor_readings(url, token, org, bucket, dataset, start):
+    """Read measurement sensor_readings (written by influx-sink from sensors.raw),
+    one row per stored record. Needs: pip install influxdb-client"""
+    from influxdb_client import InfluxDBClient          # only needed for this mode
+    q = f'''
+from(bucket: "{bucket}")
+  |> range(start: {start})
+  |> filter(fn: (r) => r._measurement == "sensor_readings" and r.dataset == "{dataset}" and r.data_source == "real")
+  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+'''
+    with InfluxDBClient(url=url, token=token, org=org, timeout=300_000) as client:
+        res = client.query_api().query_data_frame(q)
+    if isinstance(res, list):                            # several tables -> one frame
+        res = pd.concat(res, ignore_index=True)
+    return res
+
+
+def influx_to_uci_df(raw, run=-1):
+    """Stored records -> the same cleaned hourly DataFrame that dl.load_uci() gives.
+
+    InfluxDB keeps every replay run, and its point time is the ARRIVAL time; the
+    record's position in the dataset is its sequence_id (0 = first CSV row, one hour
+    apart). Runs are separated where sequence_id starts again; run=-1 = latest run."""
+    if raw is None or len(raw) == 0:
+        raise SystemExit("no UCI records found in InfluxDB (measurement sensor_readings). "
+                         "Run a UCI replay with influx-sink first, or widen --influx-range.")
+    missing = [c for c in dl.UCI_FEATURES + ["sequence_id"] if c not in raw.columns]
+    if missing:
+        raise SystemExit(f"sensor_readings lacks fields {missing}")
+    d = raw.sort_values("_time").reset_index(drop=True)
+    seq = d["sequence_id"].astype(int)
+    run_id = (seq.diff() < 0).cumsum()                   # sequence_id restarts -> new run
+    runs = []
+    for rid, g in d.groupby(run_id):
+        runs.append(g)
+        s_ = g["sequence_id"].astype(int)
+        print(f"  run {len(runs) - 1}: stored {pd.Timestamp(g['_time'].iloc[0]):%Y-%m-%d %H:%M} .. "
+              f"{pd.Timestamp(g['_time'].iloc[-1]):%H:%M}, {len(g)} records, sequence_id {s_.min()}-{s_.max()}")
+    g = runs[run]
+    print(f"  using run {runs.index(g) if run >= 0 else len(runs) + run}")
+    g = g.assign(sequence_id=g["sequence_id"].astype(int))
+    g = g[g["sequence_id"] < UCI_N_ROWS]                 # first pass only (REPLAY_LOOP=true repeats)
+    g = g.drop_duplicates("sequence_id").sort_values("sequence_id")
+    got = len(g)
+    if got < UCI_N_ROWS:
+        print(f"  WARNING: {UCI_N_ROWS - got} of {UCI_N_ROWS} records are not in InfluxDB "
+              f"(e.g. the sink started late); gaps are interpolated like missing values")
+    idx = UCI_FIRST_TS + pd.to_timedelta(g["sequence_id"].values, unit="h")
+    df = pd.DataFrame(g[dl.UCI_FEATURES].astype(float).values, index=idx, columns=dl.UCI_FEATURES)
+    full = pd.date_range(UCI_FIRST_TS, periods=UCI_N_ROWS, freq="h")
+    df = df.reindex(full)                                # absent records -> NaN
+    # same cleaning as dl.load_uci(): -200 = missing, short gaps interpolated
+    df = df.replace(-200, np.nan)
+    df = df.interpolate(method="time", limit=6).ffill().bfill()
+    # same memory layout as dl.load_uci(): gradient boosting sums in memory order,
+    # so a different layout changes its result in the 3rd decimal for identical data
+    df = pd.DataFrame(np.asfortranarray(df.values), index=df.index, columns=df.columns)
+    print(f"  {got} records read from InfluxDB -> {len(df)} hourly rows")
+    return df
 
 
 def similarity(real_w, syn_w, n=2000, seed=0):
@@ -105,7 +176,11 @@ def load_faisal_splits(path, test_part):
             z["mean"].astype(np.float64), z["std"].astype(np.float64), feats, test_key)
 
 
-def run_uci(path, syn_specs, L, splits=None, test_part="test_30pct"):
+def run_uci(path, syn_specs, L, splits=None, test_part="test_30pct", df=None,
+            out_name="batch3_uci_forecasting.csv", save_artifacts=True):
+    """df: an already loaded UCI DataFrame (e.g. read from InfluxDB) instead of path.
+    save_artifacts=False keeps results/uci_scaler.npz and uci_train_windows.npy as they
+    are (Pipeline 5 and the DCR baseline use them)."""
     print(f"\n=== Task A: UCI forecasting ({dl.UCI_TARGET}, 1 step ahead) ===")
     t_idx = dl.UCI_FEATURES.index(dl.UCI_TARGET)
     if splits:
@@ -114,7 +189,7 @@ def run_uci(path, syn_specs, L, splits=None, test_part="test_30pct"):
         print(f"  using Faisal's split file {splits}: X_train + {test_key} (clipped +-4, his scaler)")
     else:
         # ---- built here from the CSV ----
-        df = dl.load_uci(path)
+        df = dl.load_uci(path) if df is None else df
         train_df, test_df = dl.chrono_split(df, 0.7)
         scaler = dl.ZScaler().fit(train_df.values)
         tr, te = scaler.transform(train_df.values), scaler.transform(test_df.values)
@@ -122,8 +197,9 @@ def run_uci(path, syn_specs, L, splits=None, test_part="test_30pct"):
         train_w, test_w = dl.make_windows(tr, L), dl.make_windows(te, L)
     # same file names either way, so Pipeline 5, check_synthetic.py and the test kit
     # always use the scaling and training windows that Batch 3 used
-    np.savez(os.path.join(OUT, "uci_scaler.npz"), mean=mean, std=std, features=np.array(feats))
-    np.save(os.path.join(OUT, "uci_train_windows.npy"), train_w)   # for Suyoung / DCR
+    if save_artifacts:
+        np.savez(os.path.join(OUT, "uci_scaler.npz"), mean=mean, std=std, features=np.array(feats))
+        np.save(os.path.join(OUT, "uci_train_windows.npy"), train_w)   # for Suyoung / DCR
     X_te, y_te = windows_to_xy(test_w, t_idx)
     print(f"  train windows {train_w.shape}, test windows {test_w.shape}")
 
@@ -150,7 +226,7 @@ def run_uci(path, syn_specs, L, splits=None, test_part="test_30pct"):
                          "RMSE": mean_squared_error(y_te, pred) ** 0.5 * std_t, **sim})
     res = pd.DataFrame(rows)
     print(res.round(4).to_string(index=False))
-    res.to_csv(os.path.join(OUT, "batch3_uci_forecasting.csv"), index=False)
+    res.to_csv(os.path.join(OUT, out_name), index=False)
     return res
 
 
@@ -218,6 +294,14 @@ if __name__ == "__main__":
                                          "instead of building windows from the CSV")
     ap.add_argument("--uci-test-part", choices=["test_30pct", "test"], default="test_30pct",
                     help="with --uci-splits: last 30%% (default) or last 15%% as test period")
+    ap.add_argument("--uci-from-influx", action="store_true",
+                    help="read the UCI stream persisted in InfluxDB (sensor_readings) instead of the CSV")
+    ap.add_argument("--influx-url", default=os.getenv("INFLUX_URL", "http://localhost:8086"))
+    ap.add_argument("--influx-token", default=os.getenv("INFLUX_TOKEN", "synstream-secret-token"))
+    ap.add_argument("--influx-org", default=os.getenv("INFLUX_ORG", "synstream_org"))
+    ap.add_argument("--influx-bucket", default=os.getenv("INFLUX_BUCKET", "synstream_bucket"))
+    ap.add_argument("--influx-range", default="-30d", help="Flux range start, e.g. -30d or 2026-11-24T00:00:00Z")
+    ap.add_argument("--influx-run", type=int, default=-1, help="which stored replay run (-1 = latest)")
     ap.add_argument("--hai-train", help="HAI train CSV path or glob")
     ap.add_argument("--hai-test", help="HAI test CSV path or glob")
     ap.add_argument("--hai-labels", help="HAI 23.05 label CSVs (glob), if labels are separate")
@@ -229,9 +313,16 @@ if __name__ == "__main__":
     ap.add_argument("--L", type=int, default=dl.WINDOW_LEN)
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    if not (a.uci or a.uci_splits or a.hai_train):
-        ap.error("give --uci (or --uci-splits) and/or --hai-train/--hai-test")
-    if a.uci or a.uci_splits:
+    if not (a.uci or a.uci_splits or a.uci_from_influx or a.hai_train):
+        ap.error("give --uci (or --uci-splits / --uci-from-influx) and/or --hai-train/--hai-test")
+    if a.uci_from_influx:
+        print(f"reading the persisted UCI stream from InfluxDB ({a.influx_url}, bucket {a.influx_bucket})")
+        raw = fetch_sensor_readings(a.influx_url, a.influx_token, a.influx_org, a.influx_bucket,
+                                    "UCI_AirQuality", a.influx_range)
+        df = influx_to_uci_df(raw, a.influx_run)
+        run_uci(None, a.uci_synthetic, a.L, df=df,
+                out_name="batch3_uci_forecasting_influx.csv", save_artifacts=False)
+    elif a.uci or a.uci_splits:
         run_uci(a.uci, a.uci_synthetic, a.L, a.uci_splits, a.uci_test_part)
     if a.hai_train:
         run_hai(a.hai_train, a.hai_test, a.hai_labels, a.hai_synthetic,
