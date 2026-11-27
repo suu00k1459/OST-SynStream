@@ -145,7 +145,7 @@ with tab3:
         st.subheader("Forecasting error (MAE) by training data")
         models = df3[df3["model"] != "-"]
         pivot = models.pivot(index="train_on", columns="model", values="MAE")
-        st.bar_chart(pivot)
+        st.bar_chart(pivot, stack=False)
 
         baseline = df3[df3["model"] == "-"]
         if not baseline.empty:
@@ -160,6 +160,18 @@ with tab3:
         )
         st.dataframe(sim)
         st.caption("These metrics are distances between real and synthetic data: lower means more similar.")
+
+        st.subheader("Anomaly detection on HAI (classification)")
+        df_h = load("batch3_hai_anomaly.csv")
+        if df_h is not None:
+            st.dataframe(df_h.set_index("train_on"))
+            cls = df_h.set_index("train_on")[["AUROC", "F1", "Precision", "Recall"]]
+            st.bar_chart(cls, stack=False)
+            st.caption(
+                "Results from Hazem's file batch3_hai_anomaly.csv (HAI, IsolationForest). "
+                "REAL (TRTR) = trained on real windows; TimeVAE = trained on synthetic windows (TSTR). "
+                "One generator and one model only. Higher is better for AUROC, F1, Precision and Recall."
+            )
 
 with tab4:
     st.subheader("Do synthetic windows cover the same region as the real ones?")
@@ -216,5 +228,7 @@ with tab4:
                         "not taken from Suyoung's result file, which has no Wasserstein or ACF column. "
                         "Wasserstein: distance between the value distributions of each feature (mean over features). "
                         "ACF difference: mean absolute difference between the mean autocorrelation curves. "
-                        "Lower means more similar to the real windows."
+                        "Lower means more similar to the real windows. "
+                        "For UCI the same kind of distances computed by Hazem are in the Batch 3 tab; "
+                        "they can differ a little because they come from his own computation and sample."
                     )
