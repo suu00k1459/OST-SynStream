@@ -138,7 +138,22 @@ with tab4:
             except ValueError as err:
                 st.error(str(err))
             else:
-                st.scatter_chart(df, x="x", y="y", color="source", size=20)
+                import altair as alt
+                palette = ["#56B4E9", "#009E73", "#CC79A7", "#F0E442"]  # generators; real data is always orange
+                order = ["real"] + [g for g in chosen]
+                colors = ["#E69F00"] + palette[: len(chosen)]
+                chart = (
+                    alt.Chart(df)
+                    .mark_circle(size=45, opacity=0.6)
+                    .encode(
+                        x=alt.X("x:Q", title="component 1"),
+                        y=alt.Y("y:Q", title="component 2"),
+                        color=alt.Color("source:N", scale=alt.Scale(domain=order, range=colors), title="source"),
+                        tooltip=["source", "x", "y"],
+                    )
+                    .interactive()
+                )
+                st.altair_chart(chart, use_container_width=True)
                 if explained is not None:
                     st.caption(f"PCA fitted on the real windows only. The two components explain {explained:.0%} of their variance.")
                 else:
