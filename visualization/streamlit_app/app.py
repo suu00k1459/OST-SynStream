@@ -48,6 +48,51 @@ def flat(path, n, seed):
     return np.asarray(arr[idx], dtype=np.float64).reshape(len(idx), -1)
 
 
+def _windows3d(path, n, seed):
+    """Loads windows as an array (windows, time steps, features); at most n random windows."""
+    arr = np.nan_to_num(np.load(path, mmap_mode="r"))
+    idx = np.sort(np.random.default_rng(seed).choice(len(arr), size=min(n, len(arr)), replace=False))
+    a = np.asarray(arr[idx], dtype=np.float64)
+    if a.ndim == 2:
+        a = a[:, :, None]
+    if a.ndim != 3:
+        raise ValueError(f"Expected windows of shape (windows, time, features), got {a.shape}")
+    return a
+
+
+def _acf(a, max_lag=12):
+    """Mean autocorrelation (over windows) at lags 1..max_lag, one curve per feature: shape (lags, features)."""
+    x = a - a.mean(axis=1, keepdims=True)
+    var = (x ** 2).sum(axis=1) + 1e-12
+    lags = range(1, min(max_lag, a.shape[1] - 1) + 1)
+    return np.stack([((x[:, :-k] * x[:, k:]).sum(axis=1) / var).mean(axis=0) for k in lags])
+
+
+@st.cache_data(show_spinner="Computing the distances...")
+def dist_metrics(real_path, syn_paths, n, seed):
+    """Wasserstein distance and ACF difference of each generator against the real windows.
+
+    Wasserstein: 1-D distance between the value distributions of each feature (mean over features).
+    ACF difference: mean absolute difference between the mean autocorrelation curves (lags 1..12).
+    """
+    real = _windows3d(real_path, n, seed)
+    levels = np.linspace(0.005, 0.995, 200)
+    q_real = np.quantile(real.reshape(-1, real.shape[2]), levels, axis=0)
+    acf_real = _acf(real)
+    rows = []
+    for name, path in syn_paths:
+        syn = _windows3d(path, n, seed)
+        if syn.shape[1:] != real.shape[1:]:
+            raise ValueError(f"{name}: windows have shape {syn.shape[1:]}, real windows {real.shape[1:]}")
+        q_syn = np.quantile(syn.reshape(-1, syn.shape[2]), levels, axis=0)
+        rows.append({
+            "generator": name,
+            "wasserstein (mean over features)": float(np.abs(q_real - q_syn).mean()),
+            "ACF difference (lags 1-12)": float(np.abs(acf_real - _acf(syn)).mean()),
+        })
+    return pd.DataFrame(rows), real.shape[1:]
+
+
 @st.cache_data(show_spinner="Computing the projection...")
 def embed_2d(real_path, syn_paths, method, n, seed):
     """2-D projection of real and synthetic windows. Returns (DataFrame, explained variance or None)."""
@@ -159,3 +204,17 @@ with tab4:
                 else:
                     st.caption("t-SNE is fitted on all windows together. Distances between far-apart clusters are not meaningful.")
                 st.caption(f"Each window is flattened to one vector. At most {n} random windows per source, fixed seed. Training windows only, not live data.")
+                st.subheader("Distances computed from these windows")
+                try:
+                    dm, shape = dist_metrics(str(real_path), tuple((g, str(syn[g])) for g in chosen), n, 0)
+                except ValueError as err:
+                    st.error(str(err))
+                else:
+                    st.dataframe(dm.set_index("generator"), use_container_width=True)
+                    st.caption(
+                        f"Computed here from the training windows (shape {shape[0]} time steps x {shape[1]} features), "
+                        "not taken from Suyoung's result file, which has no Wasserstein or ACF column. "
+                        "Wasserstein: distance between the value distributions of each feature (mean over features). "
+                        "ACF difference: mean absolute difference between the mean autocorrelation curves. "
+                        "Lower means more similar to the real windows."
+                    )
