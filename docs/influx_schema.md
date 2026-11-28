@@ -2,6 +2,8 @@
 
 Org / bucket / token: as in the team docker-compose (`synstream_org`, `synstream_bucket`).
 
+Checked by Hazem on 28 Nov 2026: the schema matches what Pipelines 3 to 5 send.
+
 ## Kafka topics read by the sink
 
 | Topic | Producer | Content |
@@ -31,7 +33,7 @@ All source timestamps are the original dataset times (2004-2005) and the replay 
 
 | Measurement | Tags | Fields | Source topic |
 |---|---|---|---|
-| `sensor_readings` (Sebastian) | `dataset`, `data_source` | one field per sensor | `sensors.raw` |
+| `sensor_readings` (Sebastian) | `dataset`, `data_source` | one field per sensor, `sequence_id`, `ground_truth_anomaly` (`event_time` is not stored here) | `sensors.raw` |
 | `sensor_window` | `dataset`, `stream_type`, `generator`, `sensor` | `value` (normalized), `value_raw`, `window_id`, `event_time` | `sensors.windowed.real`, `sensors.windowed.synthetic` |
 | `anomaly_scores` | `dataset` | `anomaly_score`, `anomaly_threshold`, `max_abs_z`, `missing_sensors`, `is_anomaly`, `forecast_abs_err` | `analytics.scores` |
 | `alerts` | `dataset`, `type`, `sensor`, `detector` | `score`, `max_abs_z`, `trigger_retrain`, `event_time` | `analytics.alerts` |
@@ -67,13 +69,13 @@ Field types stay fixed so writes never conflict (integers for counts, floats for
 
 ## Batch results (not stored in InfluxDB)
 
-Batch 2 and Batch 3 results are static tables (`evaluation_results.csv`, `batch3_uci_forecasting.csv`). They are shown in the Streamlit app, not in Grafana.
+Batch 2 and Batch 3 results are static tables (`evaluation_results.csv`, `batch3_uci_forecasting.csv`, `batch3_hai_anomaly.csv`). They are shown in the Streamlit app, not in Grafana. Batch 3 can read the UCI sensor values from `sensor_readings` (`--uci-from-influx`).
 
 ## Notes
 
 - Windows overlap (size 24, slide 4): only the last 4 rows of each window should be written.
 - Sensor names contain parentheses: always quote them in Flux queries.
-- `dcr` and `dcr_ratio` only appear when training windows are available to Hazem's service. Checked in the real HAI run (HAI 22.04 test1.csv): both are written for `HAI`; for `UCI_AirQuality` only a few points exist.
+- `dcr` and `dcr_ratio` need the training windows of the dataset in Hazem's service. Checked in the real HAI run (HAI 22.04 test1.csv): both are written for `HAI`. Hazem reports that they are now also written for every `UCI_AirQuality` window (`uci_train_windows.npy` is on main).
 - In the real HAI run only the generator `TimeVAE` is streamed (`generator` tag).
 - Sensor names depend on the dataset: a Grafana `sensor` variable that still holds a UCI sensor (e.g. `AH`) shows no data on `dataset=HAI`.
 - `alert_evaluation` and `attack_event` need the HAI replay (`DATASET_NAME=HAI`, `river-hai`, `data/hai-22.04/test1.csv`). Training files of HAI contain no attacks.
@@ -81,7 +83,8 @@ Batch 2 and Batch 3 results are static tables (`evaluation_results.csv`, `batch3
 
 ## Open questions
 
-- [ ] Sebastian: do the sensor values inside `features` reach `sensor_readings`? Naming: `sensor_readings`/`data_source` vs `sensor_window`/`stream_type`.
-- [ ] Hazem: add `analytics.scores` to `common/config.py`.
+- [x] Sebastian: do the sensor values inside `features` reach `sensor_readings`? Yes: Hazem's Batch 3 reads them with `--uci-from-influx` and found 9,357 of 9,357 UCI records.
+- [ ] Naming (Sebastian): `sensor_readings`/`data_source` vs `sensor_window`/`stream_type`.
+- [x] Hazem: add `analytics.scores` to `common/config.py` (done: `TOPIC_ANALYTICS_SCORES`).
 - [x] Is the HAI replay producer planned? (Faisal): the replay producer reads `DATASET_NAME=HAI` from `data/hai-22.04/test1.csv`.
-- [ ] End-to-end check of `feature_bands` with the full stack (needs Flink output on `sensors.features.real`).
+- [x] End-to-end check of `feature_bands` with the full stack: done on the real HAI run (bands written for HAI sensors, shown in `synstream-feature-bands.json`).
