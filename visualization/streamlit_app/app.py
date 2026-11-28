@@ -60,7 +60,7 @@ def _windows3d(path, n, seed):
     return a
 
 
-def _acf(a, max_lag=12):
+def _acf(a, max_lag=5):
     """Mean autocorrelation (over windows) at lags 1..max_lag, one curve per feature: shape (lags, features)."""
     x = a - a.mean(axis=1, keepdims=True)
     var = (x ** 2).sum(axis=1) + 1e-12
@@ -72,23 +72,26 @@ def _acf(a, max_lag=12):
 def dist_metrics(real_path, syn_paths, n, seed):
     """Wasserstein distance and ACF difference of each generator against the real windows.
 
-    Wasserstein: 1-D distance between the value distributions of each feature (mean over features).
-    ACF difference: mean absolute difference between the mean autocorrelation curves (lags 1..12).
+    Same definitions as Hazem's stream_analytics/metrics.py (Pipeline 5):
+    Wasserstein: scipy 1-D distance between the value distributions of each feature, mean over features.
+    ACF difference: mean absolute difference between the mean autocorrelation curves (lags 1..5).
     """
     real = _windows3d(real_path, n, seed)
-    levels = np.linspace(0.005, 0.995, 200)
-    q_real = np.quantile(real.reshape(-1, real.shape[2]), levels, axis=0)
+    from scipy.stats import wasserstein_distance
+
+    flat_real = real.reshape(-1, real.shape[2])
     acf_real = _acf(real)
     rows = []
     for name, path in syn_paths:
         syn = _windows3d(path, n, seed)
         if syn.shape[1:] != real.shape[1:]:
             raise ValueError(f"{name}: windows have shape {syn.shape[1:]}, real windows {real.shape[1:]}")
-        q_syn = np.quantile(syn.reshape(-1, syn.shape[2]), levels, axis=0)
+        flat_syn = syn.reshape(-1, syn.shape[2])
+        w = np.mean([wasserstein_distance(flat_real[:, d], flat_syn[:, d]) for d in range(flat_real.shape[1])])
         rows.append({
             "generator": name,
-            "wasserstein (mean over features)": float(np.abs(q_real - q_syn).mean()),
-            "ACF difference (lags 1-12)": float(np.abs(acf_real - _acf(syn)).mean()),
+            "wasserstein (mean over features)": float(w),
+            "ACF difference (lags 1-5)": float(np.abs(acf_real - _acf(syn)).mean()),
         })
     return pd.DataFrame(rows), real.shape[1:]
 
@@ -226,8 +229,9 @@ with tab4:
                     st.caption(
                         f"Computed here from the training windows (shape {shape[0]} time steps x {shape[1]} features), "
                         "not taken from Suyoung's result file, which has no Wasserstein or ACF column. "
-                        "Wasserstein: distance between the value distributions of each feature (mean over features). "
-                        "ACF difference: mean absolute difference between the mean autocorrelation curves. "
+                        "Same definitions as in Hazem's metrics.py: Wasserstein = scipy 1-D distance between the value "
+                        "distributions of each feature (mean over features); ACF difference = mean absolute difference "
+                        "between the mean autocorrelation curves at lags 1-5. "
                         "Lower means more similar to the real windows. "
                         "For UCI the same kind of distances computed by Hazem are in the Batch 3 tab; "
                         "they can differ a little because they come from his own computation and sample."
