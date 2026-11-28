@@ -234,5 +234,7 @@ with tab4:
                         "between the mean autocorrelation curves at lags 1-5. "
                         "Lower means more similar to the real windows. "
                         "For UCI the same kind of distances computed by Hazem are in the Batch 3 tab; "
-                        "they can differ a little because they come from his own computation and sample."
+                        "they can differ a little because they come from his own computation and sample. "
+                        "These are batch values (one sample of windows). They are not comparable with the live Pipeline 5 "
+                        "values in Grafana, which use only the last 10 window pairs and are on a different scale."
                     )
